@@ -691,22 +691,50 @@ if (SIN_CONFIGURAR) {
 pintarNav();
 
 $('btn-entrar').addEventListener('click', entrar);
-$('clave').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+// Enter en cualquiera de los dos campos. Antes solo funcionaba desde la contraseña: si
+// alguien escribía el correo y daba Enter, no pasaba absolutamente nada y parecía que la
+// app estaba muerta.
+['correo','clave'].forEach(id =>
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); }));
+
+// Los mensajes de error de Firebase vienen en inglés y con códigos. Aquí se traducen a
+// algo accionable, y se deja el código entre paréntesis: si algo raro pasa, ese código es
+// lo que permite diagnosticarlo sin adivinar.
+const ERRORES = {
+  'auth/invalid-credential':  'Correo o contraseña incorrectos. Revisa que no se haya colado un espacio y que la contraseña lleve sus guiones.',
+  'auth/wrong-password':      'Esa contraseña no es la de esta cuenta.',
+  'auth/user-not-found':      'No hay ninguna cuenta con ese correo.',
+  'auth/invalid-email':       'Ese correo está mal escrito.',
+  'auth/user-disabled':       'Esa cuenta está desactivada.',
+  'auth/too-many-requests':   'Demasiados intentos seguidos. Espera un par de minutos.',
+  'auth/network-request-failed':'No hay conexión, o algo en este navegador la está bloqueando.',
+  'auth/unauthorized-domain': 'Esta dirección no está autorizada en Firebase.'
+};
 async function entrar() {
   if (SIN_CONFIGURAR) return;
-  const correo = $('correo').value.trim(), clave = $('clave').value;
-  const err = $('error-acceso');
+  // se limpian espacios y mayúsculas del correo: el teclado del celular pone mayúscula
+  // en la primera letra, y al copiar y pegar suele colarse un espacio al final
+  const correo = $('correo').value.trim().toLowerCase();
+  const clave  = $('clave').value.trim();
+  $('correo').value = correo;
+  const err = $('error-acceso'), btn = $('btn-entrar');
   err.hidden = true;
-  if (!correo || !clave) { err.hidden = false; err.textContent = 'Escribe tu correo y tu contraseña.'; return; }
-  $('btn-entrar').disabled = true;
+  if (!correo || !clave) {
+    err.hidden = false;
+    err.textContent = 'Escribe tu correo y tu contraseña.';
+    return;
+  }
+  // que el botón diga que está haciendo algo: sin esto, un inicio de sesión lento se ve
+  // igual que un botón que no funciona
+  const textoBtn = btn.textContent;
+  btn.disabled = true; btn.textContent = 'entrando...';
   try {
     await signInWithEmailAndPassword(auth, correo, clave);
   } catch (e) {
     err.hidden = false;
-    err.textContent = e.code === 'auth/invalid-credential'
-      ? 'Correo o contraseña incorrectos.' : 'No se pudo entrar. Revisa tu conexión.';
+    err.textContent = (ERRORES[e.code] || 'No se pudo entrar.') + ' (' + (e.code || 'sin código') + ')';
     console.error('entrar', e);
-  } finally { $('btn-entrar').disabled = false; }
+  } finally { btn.disabled = false; btn.textContent = textoBtn; }
 }
 $('btn-salir').addEventListener('click', async () => {
   desuscribir.forEach(u => { try { u(); } catch(e){} });
