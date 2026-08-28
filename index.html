@@ -27,6 +27,10 @@
   --r:14px; --sombra:0 1px 2px rgba(61,43,39,.06),0 8px 24px rgba(61,43,39,.06);
 }
 *{box-sizing:border-box}
+/* Sin esto, cualquier regla con display (como el flex de la pantalla de acceso) le GANA
+   al atributo hidden y el elemento se queda visible. Ya mordió en producción: la pantalla
+   de acceso seguía pintada arriba de la app después de entrar. Tercera app donde pasa. */
+[hidden]{display:none!important}
 body{margin:0;background:var(--crema);color:var(--tinta);font-family:var(--cuerpo);
   font-size:15px;line-height:1.5;-webkit-text-size-adjust:100%}
 h1,h2,h3{font-family:var(--display);font-weight:600;margin:0;line-height:1.15}
@@ -84,6 +88,14 @@ label{display:block;font-size:12.5px;font-weight:500;color:var(--tinta-suave);ma
 .p-rosa{background:var(--rosa-claro);color:var(--rosa-hondo)}
 .p-gris{background:var(--hueso);color:var(--gris)}
 
+.chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.chip{border:1px solid var(--rosa-borde);background:none;color:var(--rosa-hondo);
+  border-radius:999px;padding:6px 14px;font-size:13px;font-weight:500}
+.chip[aria-pressed="true"]{background:var(--rosa-fuerte);color:var(--blanco);border-color:var(--rosa-fuerte)}
+.nav-periodo{background:none;border:1px solid var(--arena);border-radius:10px;
+  padding:6px 12px;font-size:15px;color:var(--tinta-suave)}
+.barra-fondo{background:var(--hueso);border-radius:6px;height:10px;overflow:hidden;margin-top:4px}
+.barra-relleno{background:var(--rosa);height:100%;border-radius:6px}
 .vacio{text-align:center;color:var(--gris);padding:28px 16px;font-size:14px}
 .aviso{border-radius:12px;padding:12px 14px;font-size:13.5px;margin-bottom:12px}
 .aviso.falta{background:var(--ambar-fondo);color:var(--ambar);border:1px solid #E8D5A8}
@@ -176,12 +188,32 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
   </header>
 
   <main class="envoltura">
+    <!-- INICIO -->
+    <section class="pagina activa" id="pg-inicio">
+      <div class="titulo">
+        <div><h2>Hoy</h2>
+          <p class="sub" id="sub-inicio">así va Entre Líneas</p></div>
+        <button class="btn" id="btn-inicio-pedido">+ pedido</button>
+      </div>
+      <div class="rejilla tres" id="inicio-cifras" style="margin-bottom:16px"></div>
+      <div id="inicio-avisos"></div>
+      <div class="rejilla dos">
+        <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Lo más urgente</h3>
+          <div id="inicio-urgentes"></div></div>
+        <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Pendientes del equipo</h3>
+          <div id="inicio-pendientes"></div></div>
+      </div>
+    </section>
+
     <!-- PEDIDOS -->
-    <section class="pagina activa" id="pg-pedidos">
+    <section class="pagina" id="pg-pedidos">
       <div class="titulo">
         <div><h2>Pedidos</h2>
           <p class="sub">ordenados solos: primero lo que se vence antes</p></div>
-        <button class="btn" id="btn-nuevo-pedido">+ pedido</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn suave" id="btn-pegar-pedido">pegar de la página</button>
+          <button class="btn" id="btn-nuevo-pedido">+ pedido</button>
+        </div>
       </div>
       <div id="avisos-pedidos"></div>
       <div id="cola-pedidos"></div>
@@ -208,15 +240,19 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
       <div id="tabla-inventario"></div>
     </section>
 
-    <!-- DINERO -->
+    <!-- MOVIMIENTOS -->
     <section class="pagina" id="pg-dinero">
       <div class="titulo">
-        <div><h2>Dinero</h2>
+        <div><h2>Movimientos</h2>
           <p class="sub" id="sub-semana">la semana</p></div>
         <button class="btn" id="btn-nuevo-gasto">+ gasto</button>
       </div>
       <div class="rejilla tres" id="resumen-dinero" style="margin-bottom:16px"></div>
       <div id="detalle-dinero"></div>
+      <div class="tarjeta" style="margin-top:12px">
+        <h3 style="font-size:18px;margin-bottom:8px">Historial</h3>
+        <div id="historial-dinero"></div>
+      </div>
     </section>
 
     <!-- EQUIPO -->
@@ -227,6 +263,24 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
         <button class="btn" id="btn-nueva-tarea">+ pendiente</button>
       </div>
       <div id="lista-tareas"></div>
+    </section>
+
+    <!-- RESUMEN -->
+    <section class="pagina" id="pg-resumen">
+      <div class="titulo">
+        <div><h2>Resumen</h2>
+          <p class="sub">el cierre del negocio, por semana o por mes</p></div>
+      </div>
+      <div class="chips" style="margin-bottom:12px">
+        <button class="chip" id="res-semana" aria-pressed="true">semana</button>
+        <button class="chip" id="res-mes" aria-pressed="false">mes</button>
+        <span style="flex:1"></span>
+        <button class="nav-periodo" id="res-atras" aria-label="periodo anterior">‹</button>
+        <b id="res-titulo" style="min-width:150px;text-align:center;font-size:14px">—</b>
+        <button class="nav-periodo" id="res-adelante" aria-label="periodo siguiente">›</button>
+      </div>
+      <div class="rejilla tres" id="res-cifras" style="margin-bottom:12px"></div>
+      <div id="res-cuerpo"></div>
     </section>
   </main>
 
@@ -471,6 +525,42 @@ function faltantes() {
   return salida.sort((a,b) => b.falta - a.falta);
 }
 
+// ── El puente con la página pública: el bloque [EL:v1] ─────────
+// La página de pedidos deja al final del mensaje de WhatsApp un bloque delimitado de
+// clave=valor. Aquí se lee para que un pedido entre pegándolo, sin volver a teclearlo.
+// Los códigos son EXACTAMENTE los que la página emite (su CAMPOS_POR_PIEZA); si allá se
+// agrega una línea nueva, hay que agregarla aquí.
+const PIEZAS_EL = {
+  lego:'cuadro LEGO', piedras:'arte en piedras', cajas:'caja de regalo',
+  servilletas:'servilletas', etiquetas:'etiquetas', empresarial:'regalo empresarial',
+  'no-se':'pieza por definir'
+};
+function parseBloqueEL(texto) {
+  // el bloque va delimitado a propósito: sobrevive aunque el cliente edite el texto de
+  // arriba antes de mandarlo
+  const m = /\[EL:v1\]([\s\S]*?)\[\/EL\]/.exec(String(texto || ''));
+  if (!m) return null;
+  const d = {};
+  m[1].split('\n').forEach(l => {
+    const i = l.indexOf('=');
+    if (i > 0) d[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+  });
+  if (!d.id) return null;
+  const cant = parseInt(d.figuras || d.cantidad || '1', 10);
+  return {
+    folio: d.id,
+    piezaCodigo: d.pieza || '',
+    pieza: PIEZAS_EL[d.pieza] || d.pieza || '',
+    ocasion: d.ocasion || '',
+    cantidad: Number.isInteger(cant) && cant > 0 ? cant : 1,
+    entrega: d.entrega === 'foraneo' ? 'foraneo' : 'local',
+    ciudad: d.ciudad || '',
+    // OJO: la fecha del bloque es la que PIDIÓ la clienta, nunca un compromiso del
+    // taller. Por eso entra como fechaSolicitada y la comprometida queda vacía.
+    fechaSolicitada: esFechaValida(d.fecha) ? d.fecha : null
+  };
+}
+
 // ── La semana, que es como Gaby quiere cuadrar ─────────────────
 function semanaActual() {
   const d = new Date(); const dia = (d.getDay() + 6) % 7; // lunes = 0
@@ -480,18 +570,40 @@ function semanaActual() {
 }
 const enSemana = (fISO, s) => esFechaValida(fISO)
   && fechaLocal(fISO) >= s.desde && fechaLocal(fISO) < s.hasta;
+// Un periodo navegable para el resumen: semana (lunes a domingo) o mes calendario,
+// con desplazamiento hacia atrás y de vuelta. offset 0 = el actual.
+const MESES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
+                  'septiembre','octubre','noviembre','diciembre'];
+function rangoPeriodo(tipo, offset) {
+  if (tipo === 'mes') {
+    const hoy = new Date();
+    const desde = new Date(hoy.getFullYear(), hoy.getMonth() + offset, 1);
+    const hasta = new Date(hoy.getFullYear(), hoy.getMonth() + offset + 1, 1);
+    const titulo = offset === 0 ? 'este mes'
+      : MESES_ES[desde.getMonth()] + ' ' + desde.getFullYear();
+    return {desde, hasta, titulo};
+  }
+  const s = semanaActual();
+  const desde = new Date(s.desde); desde.setDate(desde.getDate() + offset * 7);
+  const hasta = new Date(desde); hasta.setDate(desde.getDate() + 7);
+  const titulo = offset === 0 ? 'esta semana'
+    : 'semana del ' + desde.getDate() + ' de ' + MESES_ES[desde.getMonth()];
+  return {desde, hasta, titulo};
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  PANTALLAS
 // ═══════════════════════════════════════════════════════════════
 const PAGINAS = [
+  {id:'inicio',     nombre:'inicio'},
   {id:'pedidos',    nombre:'pedidos'},
+  {id:'dinero',     nombre:'movimientos'},
   {id:'cobros',     nombre:'cuentas'},
   {id:'inventario', nombre:'inventario'},
-  {id:'dinero',     nombre:'dinero'},
-  {id:'equipo',     nombre:'pendientes'}
+  {id:'equipo',     nombre:'pendientes'},
+  {id:'resumen',    nombre:'resumen'}
 ];
-let paginaActual = 'pedidos';
+let paginaActual = 'inicio';
 function pintarNav() {
   $('nav').innerHTML = PAGINAS.map(p =>
     `<button data-pagina="${p.id}" aria-current="${p.id === paginaActual}">${esc(p.nombre)}</button>`
@@ -684,6 +796,30 @@ function pintarDinero() {
             <div class="reng-lado monto neg">${dinero(g.montoCent)}</div></li>`).join('') + `</ul>`
           : `<p class="vacio">Sin gastos capturados.</p>`}</div>
     </div>`;
+
+  // historial completo: cobros y gastos mezclados, lo más nuevo arriba. Se corta en 80
+  // renglones para no volver eterna la página; el resumen es el lugar de los totales.
+  const pedidoDe = id => estado.pedidos.find(p => p.id === id);
+  const movs = [
+    ...estado.cobros.map(c => {
+      const p = pedidoDe(c.pedidoId);
+      return {fecha: c.fecha, esEntrada: c.tipo !== 'reversion',
+        monto: c.montoCent || 0,
+        titulo: (c.tipo === 'reversion' ? 'corrección de pago' : 'pago') +
+                (p ? ' · ' + (p.cliente?.nombre || p.folio || '') : ''),
+        meta: (c.cuenta || '') + (p && p.folio ? ' · ' + p.folio : '')};
+    }),
+    ...estado.gastos.map(g => ({fecha: g.fecha, esEntrada: false, monto: g.montoCent || 0,
+      titulo: g.concepto || 'gasto', meta: g.categoria || ''}))
+  ].sort((a,b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 80);
+
+  $('historial-dinero').innerHTML = !movs.length
+    ? `<p class="vacio">Todavía no hay movimientos. El primer pago o gasto que registres aparece aquí.</p>`
+    : `<ul class="lista">` + movs.map(m => `<li class="reng">
+        <div class="reng-cuerpo"><div class="reng-tit">${esc(m.titulo)}</div>
+          <div class="reng-meta">${esc(m.meta)}${m.meta ? ' · ' : ''}${fechaCorta(m.fecha)}</div></div>
+        <div class="reng-lado monto ${m.esEntrada ? 'pos' : 'neg'}">${m.esEntrada ? '+' : '−'}${dinero(m.monto)}</div>
+      </li>`).join('') + `</ul>`;
 }
 
 // ── Pendientes ─────────────────────────────────────────────────
@@ -705,9 +841,137 @@ function pintarTareas() {
 }
 const nombreDe = uid => (estado.miembros.find(m => m.id === uid)?.nombre) || 'sin asignar';
 
+// ── Inicio: el vistazo de hoy ──────────────────────────────────
+function pintarInicio() {
+  const s = semanaActual();
+  const deben = estado.pedidos.filter(p => p.estado !== 'cancelado')
+    .reduce((t, p) => t + Math.max(0, saldoDe(p)), 0);
+  const entro = estado.cobros.filter(c => enSemana(c.fecha, s))
+    .reduce((a,c) => a + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+  const salio = estado.gastos.filter(g => enSemana(g.fecha, s))
+    .reduce((a,g) => a + (g.montoCent||0), 0);
+  $('inicio-cifras').innerHTML = `
+    <div class="tarjeta"><div class="sub">te deben</div>
+      <div class="monto ${deben > 0 ? 'neg' : ''}" style="font-size:26px">${dinero(deben)}</div></div>
+    <div class="tarjeta"><div class="sub">cobrado esta semana</div>
+      <div class="monto pos" style="font-size:26px">${dinero(entro)}</div></div>
+    <div class="tarjeta"><div class="sub">gastado esta semana</div>
+      <div class="monto" style="font-size:26px">${dinero(salio)}</div></div>`;
+
+  const falta = faltantes();
+  $('inicio-avisos').innerHTML = falta.length
+    ? `<div class="aviso falta"><b>Falta material para lo prometido:</b> ` +
+      falta.slice(0,3).map(f => `${esc(f.material.nombre)} (${f.falta})`).join(' · ') +
+      ` — el detalle está en <b>inventario</b>.</div>` : '';
+
+  const urgentes = pedidosOrdenados().slice(0, 3);
+  $('inicio-urgentes').innerHTML = !urgentes.length
+    ? `<p class="vacio">Sin pedidos abiertos.</p>`
+    : `<ul class="lista">` + urgentes.map(({p,u}) => `<li class="reng">
+        <div class="reng-cuerpo"><div class="reng-tit">${esc(p.cliente?.nombre || 'sin nombre')}</div>
+          <div class="reng-meta">${esc((p.renglones||[]).map(r => r.cantidad + '× ' + (r.nombre||'')).join(' · '))}</div>
+          <span class="pastilla ${u.clase}" style="margin-top:6px;display:inline-block">${esc(u.texto)}</span></div>
+        <div class="reng-lado"><button class="btn suave chico" data-verped="${esc(p.id)}">ver</button></div>
+      </li>`).join('') + `</ul>`;
+  $('inicio-urgentes').querySelectorAll('[data-verped]').forEach(b =>
+    b.addEventListener('click', () => { irA('pedidos'); abrirPedido(b.dataset.verped); }));
+
+  const tareas = estado.tareas.filter(t => t.estado !== 'hecha')
+    .sort((a,b) => String(a.vence||'9999').localeCompare(String(b.vence||'9999'))).slice(0, 5);
+  $('inicio-pendientes').innerHTML = !tareas.length
+    ? `<p class="vacio">Nada pendiente.</p>`
+    : `<ul class="lista">` + tareas.map(t => `<li class="reng">
+        <div class="reng-cuerpo"><div class="reng-tit">${esc(t.titulo)}</div>
+          <div class="reng-meta">${esc(nombreDe(t.asignadaA))}${t.vence ? ' · ' + fechaCorta(t.vence) : ''}</div></div>
+        <div class="reng-lado"><button class="btn suave chico" data-hechai="${esc(t.id)}">hecha</button></div>
+      </li>`).join('') + `</ul>`;
+  $('inicio-pendientes').querySelectorAll('[data-hechai]').forEach(b =>
+    b.addEventListener('click', () => marcarTarea(b.dataset.hechai)));
+}
+
+// ── Resumen: el cierre que Gaby pidió, semanal (o mensual) ─────
+let resTipo = 'semana', resOffset = 0;
+function pintarResumen() {
+  const r = rangoPeriodo(resTipo, resOffset);
+  $('res-titulo').textContent = r.titulo;
+  $('res-semana').setAttribute('aria-pressed', resTipo === 'semana');
+  $('res-mes').setAttribute('aria-pressed', resTipo === 'mes');
+  $('res-adelante').disabled = resOffset >= 0;
+  const en = f => esFechaValida(f) && fechaLocal(f) >= r.desde && fechaLocal(f) < r.hasta;
+
+  // lo VENDIDO son los pedidos que nacieron en el periodo; lo COBRADO es el dinero que
+  // de verdad entró. Que se vean juntos es a propósito: la brecha entre ambos es
+  // exactamente "lo que se te está pasando cobrar".
+  const vendidos = estado.pedidos.filter(p => p.estado !== 'cancelado' && en(p.fechaSolicitada));
+  const vendido = vendidos.reduce((t,p) => t + (p.totalCent||0), 0);
+  const cobros = estado.cobros.filter(c => en(c.fecha));
+  const cobrado = cobros.reduce((a,c) => a + (c.tipo==='reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+  const gastos = estado.gastos.filter(g => en(g.fecha));
+  const gastado = gastos.reduce((a,g) => a + (g.montoCent||0), 0);
+  const balance = cobrado - gastado;
+
+  $('res-cifras').innerHTML = `
+    <div class="tarjeta"><div class="sub">vendiste (${vendidos.length} pedido${vendidos.length===1?'':'s'})</div>
+      <div class="monto" style="font-size:26px">${dinero(vendido)}</div></div>
+    <div class="tarjeta"><div class="sub">cobraste</div>
+      <div class="monto pos" style="font-size:26px">${dinero(cobrado)}</div></div>
+    <div class="tarjeta"><div class="sub">te quedó</div>
+      <div class="monto ${balance < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(balance)}</div></div>`;
+
+  // gastos por categoría, con barras a escala del mayor
+  const porCat = new Map();
+  gastos.forEach(g => porCat.set(g.categoria || 'otro',
+    (porCat.get(g.categoria || 'otro') || 0) + (g.montoCent || 0)));
+  const cats = [...porCat].sort((a,b) => b[1] - a[1]);
+  const topCat = cats.length ? cats[0][1] : 1;
+
+  // qué piezas se pidieron en el periodo
+  const piezas = new Map();
+  vendidos.forEach(p => (p.renglones||[]).forEach(rr =>
+    piezas.set(rr.nombre || 'pieza', (piezas.get(rr.nombre || 'pieza') || 0) + (rr.cantidad || 0))));
+  const topPiezas = [...piezas].sort((a,b) => b[1] - a[1]).slice(0, 6);
+
+  const porCuenta = new Map();
+  cobros.forEach(c => porCuenta.set(c.cuenta || 'sin especificar',
+    (porCuenta.get(c.cuenta || 'sin especificar') || 0) +
+    (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0))));
+
+  const porCobrar = estado.pedidos.filter(p => p.estado !== 'cancelado')
+    .map(p => ({p, saldo: saldoDe(p)})).filter(x => x.saldo > 0);
+  const totalPorCobrar = porCobrar.reduce((t,x) => t + x.saldo, 0);
+
+  $('res-cuerpo').innerHTML = `
+    <div class="rejilla dos">
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">En qué se fue el gasto</h3>
+        ${cats.length ? cats.map(([cat, monto]) => `
+          <div style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;font-size:13.5px">
+              <span>${esc(cat)}</span><span class="monto">${dinero(monto)}</span></div>
+            <div class="barra-fondo"><div class="barra-relleno" style="width:${(monto/topCat*100).toFixed(1)}%"></div></div>
+          </div>`).join('')
+        : `<p class="vacio">Sin gastos en ${esc(r.titulo)}.</p>`}</div>
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Qué te pidieron</h3>
+        ${topPiezas.length ? `<ul class="lista">` + topPiezas.map(([nom, cant]) =>
+          `<li class="reng"><div class="reng-cuerpo">${esc(nom)}</div>
+            <div class="reng-lado monto">${cant}</div></li>`).join('') + `</ul>`
+        : `<p class="vacio">Sin pedidos nuevos en ${esc(r.titulo)}.</p>`}</div>
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">A qué cuenta entró</h3>
+        ${porCuenta.size ? `<ul class="lista">` + [...porCuenta].map(([k,v]) =>
+          `<li class="reng"><div class="reng-cuerpo">${esc(k)}</div>
+            <div class="reng-lado monto">${dinero(v)}</div></li>`).join('') + `</ul>`
+        : `<p class="vacio">Sin cobros en ${esc(r.titulo)}.</p>`}</div>
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Sigue pendiente de cobro</h3>
+        <div class="monto neg" style="font-size:24px;margin-bottom:6px">${dinero(totalPorCobrar)}</div>
+        <p class="nota">${porCobrar.length
+          ? porCobrar.length + ' pedido' + (porCobrar.length===1?'':'s') + ' por cobrar — el detalle está en <b>cuentas</b>. No es del periodo: es TODO lo que te deben hoy.'
+          : 'Nadie te debe nada. Así se cierra bonito.'}</p></div>
+    </div>`;
+}
+
 function pintarTodo() {
   if (!estado.usuario) return;
-  pintarPedidos(); pintarCobros(); pintarInventario(); pintarDinero(); pintarTareas();
+  pintarInicio(); pintarPedidos(); pintarCobros(); pintarInventario();
+  pintarDinero(); pintarTareas(); pintarResumen();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -927,30 +1191,38 @@ function selectCuentas(id) {
 }
 
 // ── Alta de pedido ─────────────────────────────────────────────
-$('btn-nuevo-pedido').addEventListener('click', () => {
+// La misma pantalla sirve para capturar a mano y para el pedido que llega pegado de la
+// página: en ese caso viene prellenada (con la fecha del cliente como SOLICITADA, nunca
+// como compromiso) y trae el folio que la página ya le puso.
+function abrirNuevoPedido(prefill = {}) {
   const hoy = hoyISO();
-  abrirDialogo('Nuevo pedido', `
+  abrirDialogo(prefill.folio ? 'Pedido de la página' : 'Nuevo pedido', `
+    ${prefill.folio ? `<p class="nota" style="margin-bottom:12px">folio ${esc(prefill.folio)} —
+      revisa lo prellenado, ponle el nombre y el precio, y guarda.</p>` : ''}
     <div class="campo"><label for="f-cliente">¿de quién es el pedido?</label>
       <input type="text" id="f-cliente" maxlength="60" placeholder="nombre de la clienta"></div>
     <div class="campo"><label for="f-tel">teléfono (opcional)</label>
       <input type="tel" id="f-tel" maxlength="20"></div>
     <div class="campo"><label for="f-pieza">¿qué le vas a hacer?</label>
-      <input type="text" id="f-pieza" maxlength="60" placeholder="cuadro LEGO, piedras, caja..."></div>
+      <input type="text" id="f-pieza" maxlength="60" value="${esc(prefill.pieza || '')}"
+        placeholder="cuadro LEGO, piedras, caja..."></div>
     <div class="fila2">
       <div class="campo"><label for="f-cant">cuántas</label>
-        <input type="number" id="f-cant" min="1" step="1" value="1" inputmode="numeric"></div>
+        <input type="number" id="f-cant" min="1" step="1" value="${prefill.cantidad || 1}" inputmode="numeric"></div>
       ${campoNum('f-precio','precio por pieza','min="0"')}
     </div>
     <div class="fila2">
       <div class="campo"><label for="f-entrega">entrega</label>
-        <select id="f-entrega"><option value="local">recoge en Puebla</option>
-          <option value="foraneo">envío foráneo</option></select></div>
+        <select id="f-entrega">
+          <option value="local"${prefill.entrega === 'foraneo' ? '' : ' selected'}>recoge en Puebla</option>
+          <option value="foraneo"${prefill.entrega === 'foraneo' ? ' selected' : ''}>envío foráneo</option>
+        </select></div>
       <div class="campo"><label for="f-ciudad">ciudad (si es envío)</label>
-        <input type="text" id="f-ciudad" maxlength="60"></div>
+        <input type="text" id="f-ciudad" maxlength="60" value="${esc(prefill.ciudad || '')}"></div>
     </div>
     <div class="fila2">
       <div class="campo"><label for="f-solicitada">fecha que pidió la clienta</label>
-        <input type="date" id="f-solicitada" value="${hoy}"></div>
+        <input type="date" id="f-solicitada" value="${esc(prefill.fechaSolicitada || hoy)}"></div>
       <div class="campo"><label for="f-comprometida">fecha que tú confirmas</label>
         <input type="date" id="f-comprometida"></div>
     </div>
@@ -958,7 +1230,7 @@ $('btn-nuevo-pedido').addEventListener('click', () => {
       cola. Si la dejas vacía, el pedido sube hasta arriba como <b>falta confirmar</b>: es a
       propósito, para que no se te pierda sin fecha.</p>
     <div class="campo"><label for="f-notas">detalles</label>
-      <textarea id="f-notas" rows="2" maxlength="500" placeholder="qué debe decir, colores, referencias..."></textarea></div>
+      <textarea id="f-notas" rows="2" maxlength="500" placeholder="qué debe decir, colores, referencias...">${esc(prefill.ocasion ? 'Ocasión: ' + prefill.ocasion : '')}</textarea></div>
     <button class="btn" data-guardar style="width:100%">guardar pedido</button>
   `, async () => {
     const nombre = $('f-cliente').value.trim();
@@ -973,9 +1245,14 @@ $('btn-nuevo-pedido').addEventListener('click', () => {
     if (comprometida && !esFechaValida(comprometida)) { avisar('La fecha confirmada no es válida'); return false; }
     const entrega = $('f-entrega').value;
     const totalCent = aCent(precio) * cant;
+    // el folio de la página se respeta (es el que la clienta tiene en su WhatsApp);
+    // pegado dos veces, se rechaza aquí aunque el aviso previo se haya saltado
+    if (prefill.folio && estado.pedidos.some(p => p.folio === prefill.folio)) {
+      avisar('El pedido ' + prefill.folio + ' ya está registrado'); return false;
+    }
     try {
       await addDoc(collection(db, RAIZ + '/pedidos'), {
-        folio: nuevoFolio(),
+        folio: prefill.folio || nuevoFolio(),
         cliente: {nombre, tel: $('f-tel').value.trim()},
         // El renglón guarda su propio nombre y precio: si mañana cambia el catálogo, este
         // pedido sigue diciendo lo que se acordó el día que se tomó.
@@ -996,7 +1273,40 @@ $('btn-nuevo-pedido').addEventListener('click', () => {
       avisar('Pedido guardado');
     } catch (e) { console.error('alta pedido', e); avisar('No se pudo guardar, revisa tu conexión'); return false; }
   });
+}
+$('btn-nuevo-pedido').addEventListener('click', () => abrirNuevoPedido());
+$('btn-inicio-pedido').addEventListener('click', () => { irA('pedidos'); abrirNuevoPedido(); });
+
+// ── Pegar un pedido de la página ───────────────────────────────
+// El mensaje de WhatsApp que arma la página termina con el bloque [EL:v1]. Se pega el
+// mensaje COMPLETO tal cual llega —da igual que la clienta haya editado el texto de
+// arriba— y de ahí sale el pedido prellenado, con su mismo folio.
+$('btn-pegar-pedido').addEventListener('click', () => {
+  abrirDialogo('Pegar pedido de la página', `
+    <p class="nota" style="margin-bottom:12px">Copia el mensaje completo de WhatsApp que te
+      llegó de la página y pégalo aquí. La app encuentra sola los datos.</p>
+    <div class="campo"><textarea id="f-pegado" rows="7" placeholder="pega aquí el mensaje..."></textarea></div>
+    <button class="btn" data-guardar style="width:100%">leer el pedido</button>
+  `, () => {
+    const d = parseBloqueEL($('f-pegado').value);
+    if (!d) {
+      avisar('No encontré el bloque del pedido. Pega el mensaje completo, hasta el final.');
+      return false;
+    }
+    if (estado.pedidos.some(p => p.folio === d.folio)) {
+      avisar('El pedido ' + d.folio + ' ya está registrado');
+      return false;
+    }
+    // se cierra este diálogo y se abre el alta ya llenada; el cierre lo hace el retorno
+    setTimeout(() => abrirNuevoPedido(d), 60);
+  });
 });
+
+// ── Controles del resumen ──────────────────────────────────────
+$('res-semana').addEventListener('click', () => { resTipo = 'semana'; resOffset = 0; pintarResumen(); });
+$('res-mes').addEventListener('click', () => { resTipo = 'mes'; resOffset = 0; pintarResumen(); });
+$('res-atras').addEventListener('click', () => { resOffset--; pintarResumen(); });
+$('res-adelante').addEventListener('click', () => { if (resOffset < 0) { resOffset++; pintarResumen(); } });
 
 // ── Detalle de un pedido ───────────────────────────────────────
 function abrirPedido(id) {

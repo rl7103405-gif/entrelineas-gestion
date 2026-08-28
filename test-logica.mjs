@@ -30,7 +30,8 @@ const fuente =
 const api = new Function('estado', fuente + `
   return {aCent, dinero, esFechaValida, habilesEntre, restaHabiles, hoyISO,
           saldoDe, pagadoDe, fechaOperativa, urgencia, pedidosOrdenados,
-          existencia, consumido, faltantes, semanaActual, enSemana, DIAS_PAQUETERIA};
+          existencia, consumido, faltantes, semanaActual, enSemana, DIAS_PAQUETERIA,
+          parseBloqueEL, PIEZAS_EL, rangoPeriodo};
 `);
 
 // ── utilidades de prueba ───────────────────────────────────────
@@ -186,6 +187,52 @@ console.log('\n9. La semana va de lunes a domingo');
   chk('empieza en lunes', s.desde.getDay() === 1, 'día ' + s.desde.getDay());
   chk('dura 7 días', Math.round((s.hasta - s.desde) / 86400000) === 7);
   chk('hoy cae dentro', t.enSemana(t.hoyISO(), s));
+}
+
+// ═══════════ 10. EL BLOQUE [EL:v1] — el puente con la página ═══════════
+console.log('\n10. Un pedido pegado de la página se lee entero');
+{
+  const t = api(nuevoEstado());
+  // un mensaje como el que arma la página de verdad, con texto libre arriba
+  const msg = ['Hola! Me llamo Ana López.', 'Quiero un cuadro para mi aniversario.',
+    'Les mando fotos de referencia por aquí.', '',
+    '[EL:v1]', 'id=EL-260827-K4M9', 'pieza=lego', 'ocasion=Aniversario', 'figuras=2',
+    'entrega=foraneo', 'ciudad=Guadalajara, Jalisco', 'fecha=2026-09-10',
+    'margen_habiles=10', 'urgencia=comoda', '[/EL]'].join('\n');
+  const d = t.parseBloqueEL(msg);
+  chk('encuentra el bloque entre el texto libre', d !== null);
+  chk('folio tal cual lo tiene la clienta', d.folio === 'EL-260827-K4M9');
+  chk('el código de pieza se traduce a nombre legible', d.pieza === 'cuadro LEGO');
+  chk('2 figuras → cantidad 2', d.cantidad === 2);
+  chk('foráneo con su ciudad', d.entrega === 'foraneo' && d.ciudad === 'Guadalajara, Jalisco');
+  chk('la fecha entra como SOLICITADA (no como compromiso)', d.fechaSolicitada === '2026-09-10');
+
+  // la clienta editó el texto de arriba antes de mandar: el bloque sobrevive
+  const editado = 'hola cambie todo el texto jeje\n' + msg.slice(msg.indexOf('[EL:v1]'));
+  chk('sobrevive aunque el cliente edite el mensaje', t.parseBloqueEL(editado) !== null);
+
+  chk('un mensaje sin bloque devuelve null', t.parseBloqueEL('hola quiero un cuadro') === null);
+  chk('un bloque sin folio devuelve null', t.parseBloqueEL('[EL:v1]\npieza=lego\n[/EL]') === null);
+  const caja = t.parseBloqueEL('[EL:v1]\nid=EL-1\npieza=cajas\ncantidad=12\nentrega=local\n[/EL]');
+  chk('cajas usa cantidad, no figuras', caja.cantidad === 12 && caja.pieza === 'caja de regalo');
+  const rara = t.parseBloqueEL('[EL:v1]\nid=EL-2\npieza=lego\nfecha=2026-99-99\n[/EL]');
+  chk('una fecha inválida se descarta en vez de colarse', rara.fechaSolicitada === null);
+}
+
+console.log('\n11. Los periodos del resumen');
+{
+  const t = api(nuevoEstado());
+  const s = t.rangoPeriodo('semana', 0);
+  chk('la semana actual se titula "esta semana"', s.titulo === 'esta semana');
+  chk('empieza en lunes', s.desde.getDay() === 1);
+  const s1 = t.rangoPeriodo('semana', -1);
+  chk('la anterior dura también 7 días', Math.round((s1.hasta - s1.desde)/86400000) === 7);
+  chk('y termina donde empieza la actual', s1.hasta.getTime() === s.desde.getTime());
+  const m = t.rangoPeriodo('mes', 0);
+  chk('el mes actual se titula "este mes"', m.titulo === 'este mes');
+  chk('el mes empieza en día 1', m.desde.getDate() === 1);
+  const m2 = t.rangoPeriodo('mes', -2);
+  chk('dos meses atrás trae nombre y año', /^[a-z]+ \d{4}$/.test(m2.titulo), m2.titulo);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total
