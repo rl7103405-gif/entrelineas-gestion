@@ -3,6 +3,7 @@ CREDENCIALES.txt
 # lleva la contrasena del administrador para poder sembrar los miembros
 sembrar-miembros.mjs
 verificar-reglas.mjs
+MENSAJE-ACCESOS.txt
 NOTAS-INTERNAS.md
 
 # Basura del sistema
