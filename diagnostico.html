@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Diagnóstico · Entre Líneas</title>
+<style>
+  body{font-family:'Segoe UI',Arial,sans-serif;background:#FDF7F4;color:#3D2B27;
+    max-width:640px;margin:0 auto;padding:24px 16px;line-height:1.5}
+  h1{font-size:22px;margin:0 0 4px}
+  p.sub{color:#6E5F59;font-size:14px;margin:0 0 20px}
+  .linea{background:#fff;border:1px solid #EFDDD6;border-radius:12px;
+    padding:12px 14px;margin-bottom:10px;font-size:15px}
+  .ok{border-left:5px solid #40705C}
+  .mal{border-left:5px solid #9B3B32}
+  .esperando{border-left:5px solid #C98A80;color:#6E5F59}
+  b.v{font-variant-numeric:tabular-nums}
+  .nota{font-size:12.5px;color:#6E5F59;margin-top:20px}
+</style>
+</head>
+<body>
+<h1>Diagnóstico de conexión</h1>
+<p class="sub">Esta página no usa Firebase ni contraseñas: solo comprueba, una por una,
+las conexiones que la app necesita, y dice cuál falla. Mándale una foto de esto a Beto.</p>
+
+<div id="resultados"></div>
+<p class="nota" id="pie"></p>
+
+<script>
+// Sin módulos y sin SDK a propósito: si algo de eso estuviera roto, esta página también
+// se rompería y no diagnosticaría nada. Aquí solo hay fetch simple con tiempo límite.
+var cont = document.getElementById('resultados');
+
+function linea(id, texto) {
+  var d = document.createElement('div');
+  d.className = 'linea esperando'; d.id = id;
+  d.textContent = '⏳ ' + texto + '...';
+  cont.appendChild(d);
+  return d;
+}
+function resultado(el, ok, texto) {
+  el.className = 'linea ' + (ok ? 'ok' : 'mal');
+  el.textContent = (ok ? '✅ ' : '❌ ') + texto;
+}
+// Un fetch con reloj: aquí "se quedó colgado" es un resultado, no una espera infinita.
+function conTiempo(promesa, ms) {
+  return Promise.race([promesa,
+    new Promise(function (_, rej) { setTimeout(function () { rej(new Error('colgado')); }, ms); })]);
+}
+function describe(e) {
+  return e && e.message === 'colgado'
+    ? 'SE QUEDÓ COLGADO: algo deja pasar la petición pero nunca contesta'
+    : 'BLOQUEADO (' + ((e && e.message) || 'error') + ')';
+}
+
+var API_KEY = 'AIzaSyCXc2Yv3WBv8aCdYbELyFGsXMr7ggNe5pQ';
+
+(async function () {
+  // 1. ¿Qué versión de la app te está sirviendo el servidor AHORA MISMO?
+  var l1 = linea('t1', 'Versión de la app que recibe este navegador');
+  try {
+    var r = await conTiempo(fetch('./index.html', {cache: 'no-store'}), 8000);
+    var lm = r.headers.get('last-modified');
+    var f = lm ? new Date(lm) : null;
+    resultado(l1, true, 'La app que te llega es la del ' +
+      (f ? f.toLocaleDateString('es-MX', {day:'numeric', month:'short'}) + ' a las ' +
+           f.toLocaleTimeString('es-MX', {hour:'2-digit', minute:'2-digit'})
+         : '(fecha desconocida)'));
+  } catch (e) { resultado(l1, false, 'No se pudo leer la app: ' + describe(e)); }
+
+  // 2. El servidor del LOGIN (identitytoolkit). Se manda una cuenta falsa a propósito:
+  //    si el servidor CONTESTA —aunque sea "no existe"— la conexión está bien.
+  var l2 = linea('t2', 'Conexión con el servidor de contraseñas (login)');
+  try {
+    await conTiempo(fetch(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + API_KEY,
+      {method: 'POST', headers: {'Content-Type': 'application/json'},
+       body: JSON.stringify({email: 'diagnostico@ejemplo.invalid', password: 'x'})}), 8000);
+    resultado(l2, true, 'El servidor del login CONTESTA — por eso "contraseña correcta" sí aparece');
+  } catch (e) { resultado(l2, false, 'El servidor del login: ' + describe(e)); }
+
+  // 3. El servidor de la BASE DE DATOS por peticiones normales (REST). Un 403 es
+  //    perfecto: significa "te escuché y no traes permiso" — la conexión funciona.
+  var l3 = linea('t3', 'Conexión con la base de datos (peticiones normales)');
+  try {
+    await conTiempo(fetch(
+      'https://firestore.googleapis.com/v1/projects/entrelineas-gestion/databases/(default)/documents/diagnostico'), 8000);
+    resultado(l3, true, 'La base de datos CONTESTA por peticiones normales');
+  } catch (e) { resultado(l3, false, 'La base de datos (peticiones normales): ' + describe(e)); }
+
+  // 4. El CANAL DE ESCUCHA de la base, que es la dirección exacta que los bloqueadores
+  //    y antivirus suelen romper. Cualquier respuesta, aunque sea un error 400, es señal
+  //    de que el canal pasa.
+  var l4 = linea('t4', 'Canal de escucha de la base (el que suele bloquearse)');
+  try {
+    await conTiempo(fetch(
+      'https://firestore.googleapis.com/google.firestore.v1.Firestore/Listen/channel?gsessionid=diagnostico&VER=8'), 8000);
+    resultado(l4, true, 'El canal de escucha CONTESTA');
+  } catch (e) { resultado(l4, false, 'El canal de escucha: ' + describe(e)); }
+
+  document.getElementById('pie').textContent =
+    'Diagnóstico del ' + new Date().toLocaleString('es-MX') +
+    ' · página publicada el ' + document.lastModified;
+})();
+</script>
+</body>
+</html>
