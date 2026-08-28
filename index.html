@@ -242,6 +242,28 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
   <div class="modal-cuerpo" id="dlg-cuerpo"></div>
 </dialog>
 
+<script>
+// Red de seguridad ANTERIOR al módulo (hallazgo de la revisión): si el propio módulo no
+// llega a arrancar —un import de Firebase bloqueado, un error de carga—, los capturadores
+// que viven DENTRO del módulo no existen todavía y el fallo sería invisible otra vez.
+// Este script clásico corre primero, siempre.
+window.addEventListener('error', function (e) {
+  var err = document.getElementById('error-acceso');
+  var pantalla = document.getElementById('pantalla-acceso');
+  if (!err || !pantalla || pantalla.hidden) return;
+  err.hidden = false;
+  err.textContent = 'La página no pudo arrancar: ' + (e.message || 'error al cargar') +
+    '. Suele ser una extensión o el antivirus bloqueando a Google; prueba en incógnito.';
+});
+window.addEventListener('unhandledrejection', function (e) {
+  var err = document.getElementById('error-acceso');
+  var pantalla = document.getElementById('pantalla-acceso');
+  if (!err || !pantalla || pantalla.hidden) return;
+  var m = e.reason && (e.reason.message || e.reason.code) || String(e.reason);
+  err.hidden = false;
+  err.textContent = 'Algo falló al conectar: ' + m;
+});
+</script>
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { initializeFirestore, doc, getDoc, setDoc, collection, addDoc, onSnapshot,
@@ -724,23 +746,15 @@ function errorAcceso(txt) {
   if (!err) return;
   err.hidden = false; err.textContent = txt;
 }
-// 1. Cualquier excepción o promesa rechazada que nadie atrapó se pinta, no se pierde en
-//    una consola que nadie va a abrir.
-window.addEventListener('error', e => {
-  if ($('pantalla-acceso').hidden) return;
-  errorAcceso('Algo falló en la página: ' + (e.message || 'error desconocido'));
-});
-window.addEventListener('unhandledrejection', e => {
-  if ($('pantalla-acceso').hidden) return;
-  const m = e.reason && (e.reason.message || e.reason.code) || String(e.reason);
-  errorAcceso('Algo falló al conectar: ' + m);
-});
-// 2. Si el navegador tiene bloqueado el almacenamiento del sitio, Firebase Auth no puede
-//    ni guardar la sesión: mejor decirlo de entrada que fallar raro después.
+// (la captura global de errores vive en el script clásico de arriba, ANTES de este
+// módulo: así también atrapa un módulo que ni siquiera llegó a arrancar)
+// Si el navegador tiene bloqueado el almacenamiento del sitio, se avisa — como
+// advertencia, no como sentencia: Firebase Auth puede degradar a memoria y dejar entrar,
+// solo que la sesión no sobrevive al cerrar la pestaña.
 try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); }
 catch (e) {
-  errorAcceso('Este navegador tiene bloqueados los datos de sitios para esta página. ' +
-    'Así no se puede iniciar sesión: habilítalos o prueba en otro navegador.');
+  errorAcceso('Este navegador tiene bloqueados los datos de sitios. Puede que entres, ' +
+    'pero la sesión no se va a recordar; si algo falla, habilítalos o usa otro navegador.');
 }
 
 // Poder VER lo que se escribió. Sin esto, una contraseña mal tecleada y una cuenta mala
