@@ -155,7 +155,10 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
                  font-weight:600;padding:8px">ver</button>
       </div></div>
     <button class="btn" id="btn-entrar" style="width:100%">entrar</button>
-    <p id="error-acceso" class="aviso mal" hidden style="margin-top:12px"></p>
+    <!-- traza del intento: cada paso del inicio de sesión se escribe aquí. Existe porque
+         hubo un caso real de "no pasa nada": sin esto, un paso colgado es invisible. -->
+    <p id="acceso-paso" class="nota" style="margin-top:10px;min-height:18px" aria-live="polite"></p>
+    <p id="error-acceso" class="aviso mal" hidden style="margin-top:6px"></p>
   </div>
 </div>
 
@@ -702,6 +705,38 @@ if (SIN_CONFIGURAR) {
 }
 pintarNav();
 
+// ── DIAGNÓSTICO EN PANTALLA ───────────────────────────────────
+// Hubo un caso real de "hago clic y no pasa nada", sin ningún mensaje. Estas tres piezas
+// existen para que eso no pueda volver a ocurrir EN SILENCIO: todo error, cuelgue o
+// bloqueo del navegador termina escrito en la pantalla de acceso.
+function pasoAcceso(txt) {
+  const el = $('acceso-paso');
+  if (el) el.textContent = txt || '';
+}
+function errorAcceso(txt) {
+  const err = $('error-acceso');
+  if (!err) return;
+  err.hidden = false; err.textContent = txt;
+}
+// 1. Cualquier excepción o promesa rechazada que nadie atrapó se pinta, no se pierde en
+//    una consola que nadie va a abrir.
+window.addEventListener('error', e => {
+  if ($('pantalla-acceso').hidden) return;
+  errorAcceso('Algo falló en la página: ' + (e.message || 'error desconocido'));
+});
+window.addEventListener('unhandledrejection', e => {
+  if ($('pantalla-acceso').hidden) return;
+  const m = e.reason && (e.reason.message || e.reason.code) || String(e.reason);
+  errorAcceso('Algo falló al conectar: ' + m);
+});
+// 2. Si el navegador tiene bloqueado el almacenamiento del sitio, Firebase Auth no puede
+//    ni guardar la sesión: mejor decirlo de entrada que fallar raro después.
+try { localStorage.setItem('__t','1'); localStorage.removeItem('__t'); }
+catch (e) {
+  errorAcceso('Este navegador tiene bloqueados los datos de sitios para esta página. ' +
+    'Así no se puede iniciar sesión: habilítalos o prueba en otro navegador.');
+}
+
 // Poder VER lo que se escribió. Sin esto, una contraseña mal tecleada y una cuenta mala
 // se ven exactamente igual: puros puntitos.
 $('btn-ver').addEventListener('click', () => {
@@ -750,13 +785,29 @@ async function entrar() {
   // igual que un botón que no funciona
   const textoBtn = btn.textContent;
   btn.disabled = true; btn.textContent = 'entrando...';
+  pasoAcceso('verificando tu contraseña...');
+  // 3. Vigilante: si Firebase ni contesta ni falla (una extensión o un antivirus
+  //    bloqueando la conexión deja la petición COLGADA, no rechazada), a los 12 segundos
+  //    se dice en pantalla, con la salida concreta.
+  const vigilante = setTimeout(() => {
+    errorAcceso('El servidor no contesta. Esto casi siempre es una extensión del ' +
+      'navegador (un bloqueador de anuncios) o un antivirus deteniendo la conexión con ' +
+      'Google. Prueba en una ventana de incógnito con las extensiones apagadas, o desde ' +
+      'el celular con datos.');
+    pasoAcceso('');
+  }, 12000);
   try {
     await signInWithEmailAndPassword(auth, correo, clave);
+    pasoAcceso('contraseña correcta, cargando tu perfil...');
   } catch (e) {
     err.hidden = false;
     err.textContent = (ERRORES[e.code] || 'No se pudo entrar.') + ' (' + (e.code || 'sin código') + ')';
+    pasoAcceso('');
     console.error('entrar', e);
-  } finally { btn.disabled = false; btn.textContent = textoBtn; }
+  } finally {
+    clearTimeout(vigilante);
+    btn.disabled = false; btn.textContent = textoBtn;
+  }
 }
 $('btn-salir').addEventListener('click', async () => {
   desuscribir.forEach(u => { try { u(); } catch(e){} });
@@ -770,19 +821,28 @@ if (auth) onAuthStateChanged(auth, async u => {
     $('app').hidden = true; $('pantalla-acceso').hidden = false;
     return;
   }
+  pasoAcceso('cargando tu perfil...');
   // El rol vive en el negocio, no en el usuario: la misma persona podría entrar mañana a
-  // otro taller con otro rol.
+  // otro taller con otro rol. Si esta lectura falla, se DICE con su motivo — un fallo
+  // aquí era una de las rutas por las que "no pasaba nada".
+  let motivo = '';
   try {
     const snap = await getDoc(doc(db, RAIZ + '/miembros', u.uid));
     estado.miembro = snap.exists() ? {id:u.uid, ...snap.data()} : null;
-  } catch(e) { console.error('miembro', e); estado.miembro = null; }
+    if (!snap.exists()) motivo = 'tu cuenta existe pero nadie le ha dado acceso al negocio';
+  } catch(e) {
+    console.error('miembro', e);
+    estado.miembro = null;
+    motivo = 'no se pudo leer tu perfil (' + (e.code || e.message || 'error') + ')';
+  }
 
   if (!estado.miembro || estado.miembro.activo === false) {
-    $('error-acceso').hidden = false;
-    $('error-acceso').textContent = 'Tu cuenta todavía no tiene acceso a Entre Líneas.';
+    errorAcceso('No se pudo entrar: ' + (motivo || 'tu acceso está desactivado') + '.');
+    pasoAcceso('');
     await signOut(auth);
     return;
   }
+  pasoAcceso('');
   $('pantalla-acceso').hidden = true; $('app').hidden = false;
   $('quien-soy').textContent = (estado.miembro.nombre || u.email) +
     ' · ' + (ROLES[estado.miembro.rol] || estado.miembro.rol || '');
