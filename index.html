@@ -139,9 +139,21 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
     <h1 style="font-size:28px">Entre <b style="color:var(--rosa-hondo)">Líneas</b></h1>
     <p class="sub" style="margin:6px 0 18px">pedidos, cuentas e inventario</p>
     <div class="campo"><label for="correo">correo</label>
-      <input type="email" id="correo" autocomplete="username" inputmode="email"></div>
+      <input type="email" id="correo" autocomplete="off" inputmode="email"
+             autocapitalize="none" autocorrect="off" spellcheck="false"></div>
     <div class="campo"><label for="clave">contraseña</label>
-      <input type="password" id="clave" autocomplete="current-password"></div>
+      <div style="position:relative">
+        <!-- autocomplete="off": TODAS las apps de la familia viven en el mismo dominio de
+             GitHub Pages, y el navegador guarda las contraseñas por dominio, no por app.
+             Sin esto, Chrome rellenaba este campo con la contraseña de otra de las apps
+             y el intento fallaba sin que se viera por qué. -->
+        <input type="password" id="clave" autocomplete="off" autocapitalize="none"
+               autocorrect="off" spellcheck="false" style="padding-right:52px">
+        <button type="button" id="btn-ver" aria-label="mostrar la contraseña"
+          style="position:absolute;right:6px;top:50%;transform:translateY(-50%);
+                 background:none;border:0;color:var(--rosa-hondo);font-size:12.5px;
+                 font-weight:600;padding:8px">ver</button>
+      </div></div>
     <button class="btn" id="btn-entrar" style="width:100%">entrar</button>
     <p id="error-acceso" class="aviso mal" hidden style="margin-top:12px"></p>
   </div>
@@ -689,6 +701,16 @@ if (SIN_CONFIGURAR) {
   $('btn-entrar').disabled = true;
 }
 pintarNav();
+
+// Poder VER lo que se escribió. Sin esto, una contraseña mal tecleada y una cuenta mala
+// se ven exactamente igual: puros puntitos.
+$('btn-ver').addEventListener('click', () => {
+  const c = $('clave'), verla = c.type === 'password';
+  c.type = verla ? 'text' : 'password';
+  $('btn-ver').textContent = verla ? 'ocultar' : 'ver';
+  $('btn-ver').setAttribute('aria-label', verla ? 'ocultar la contraseña' : 'mostrar la contraseña');
+  c.focus();
+});
 
 $('btn-entrar').addEventListener('click', entrar);
 // Enter en cualquiera de los dos campos. Antes solo funcionaba desde la contraseña: si
