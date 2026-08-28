@@ -1,0 +1,163 @@
+rules_version = '2';
+
+// =====================================================================
+//  Entre Líneas — reglas de la app de gestión
+// =====================================================================
+//
+//  Proyecto Firebase PROPIO, separado del personal de Roberto: aquí hay
+//  datos de clientes de terceros (nombres y teléfonos). Si algún día el
+//  negocio se entrega o se cobra aparte, se entrega este proyecto y no se
+//  toca nada más.
+//
+//  Todo cuelga de /negocios/{negocioId}. Hoy solo existe 'entrelineas',
+//  pero así la misma app le sirve a otro taller sin migrar un documento.
+//
+//  QUIÉN ENTRA: solo quien tenga documento en
+//  /negocios/{id}/miembros/{suUid} con activo != false. Crear ese
+//  documento es lo que da acceso; borrarlo o poner activo:false lo quita.
+//
+//  DOS LIBROS SON INMUTABLES: 'cobros' e 'invMovs'. Se pueden crear y
+//  leer, nunca modificar ni borrar. Un error se corrige agregando un
+//  movimiento contrario que referencia al original. Así el saldo de un
+//  pedido y la existencia de un material siempre se pueden reconstruir, y
+//  nadie puede "arreglar" el pasado sin dejar rastro. Es lo que evita que
+//  el número que ve Gaby y el dinero que de verdad entró se separen.
+//
+//  OJO — "un aviso nunca bloquea" es regla de la INTERFAZ: que falte
+//  material no impide capturar nada. Estas reglas sí bloquean, y deben:
+//  son la única frontera real, porque la configuración de Firebase es
+//  pública en un sitio de GitHub Pages.
+//
+//  [POR CONFIRMAR CON GABY] si Elita ('apoyo') debe ver el dinero. Hoy
+//  los tres roles leen todo el negocio. Firestore no puede ocultar campos
+//  sueltos en una lectura: si Elita no debe ver importes, los cobros y
+//  gastos tendrían que vivir en documentos aparte y cambiar estas reglas.
+// =====================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /negocios/{negocio} {
+
+      // ── quién es quién ────────────────────────────────────────
+      function miDoc() {
+        return get(/databases/$(database)/documents/negocios/$(negocio)/miembros/$(request.auth.uid));
+      }
+      function esMiembro() {
+        return request.auth != null
+          && exists(/databases/$(database)/documents/negocios/$(negocio)/miembros/$(request.auth.uid))
+          && miDoc().data.get('activo', true) == true;
+      }
+      function miRol() { return miDoc().data.get('rol', ''); }
+      function esDuena() { return esMiembro() && miRol() == 'duena'; }
+      // la dueña y la socia operan el dinero; 'apoyo' captura pedidos y tareas
+      function operaDinero() { return esMiembro() && (miRol() == 'duena' || miRol() == 'socia'); }
+
+      // ── validaciones de forma ─────────────────────────────────
+      function montoValido(c) {
+        return c is int && c > 0 && c < 100000000;   // hasta $1,000,000, en centavos
+      }
+      function fechaValida(f) {
+        return f is string && f.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+      }
+      // quien registra un movimiento de dinero no puede firmarlo como otra persona
+      function firmadoPorMi(campo) {
+        return request.resource.data.get(campo, '') == request.auth.uid;
+      }
+
+      // ── el negocio y sus miembros ─────────────────────────────
+      allow read: if esMiembro();
+
+      // Solo la dueña da y quita accesos y cambia roles. Si esto lo pudiera
+      // hacer cualquiera, cualquiera podría ascenderse a dueña.
+      match /miembros/{uid} {
+        allow read:   if esMiembro();
+        allow write:  if esDuena();
+      }
+
+      // ── pedidos y clientes: los tres capturan ─────────────────
+      match /pedidos/{id} {
+        allow read:   if esMiembro();
+        allow create: if esMiembro()
+                      && request.resource.data.folio is string
+                      && request.resource.data.totalCent is int
+                      && request.resource.data.totalCent >= 0
+                      && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado'];
+        allow update: if esMiembro()
+                      && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado']
+                      // el folio identifica al pedido en voz alta y en papel: no se renombra
+                      && request.resource.data.folio == resource.data.folio;
+        // un pedido no se borra: se cancela, para que su historial de cobros siga
+        // explicando el dinero que ya entró
+        allow delete: if false;
+      }
+      match /clientes/{id} {
+        allow read: if esMiembro();
+        allow write: if esMiembro();
+      }
+
+      // ── LIBRO DE COBROS: inmutable ────────────────────────────
+      match /cobros/{id} {
+        allow read:   if esMiembro();
+        allow create: if operaDinero()
+                      && request.resource.data.pedidoId is string
+                      && request.resource.data.tipo in ['pago','reversion']
+                      && montoValido(request.resource.data.montoCent)
+                      && fechaValida(request.resource.data.fecha)
+                      && firmadoPorMi('registradoPor');
+        allow update, delete: if false;   // se corrige con una reversión, no editando
+      }
+
+      // ── LIBRO DE INVENTARIO: inmutable ────────────────────────
+      match /invMovs/{id} {
+        allow read:   if esMiembro();
+        allow create: if esMiembro()
+                      && request.resource.data.materialId is string
+                      && request.resource.data.tipo in ['compra','consumo','ajuste']
+                      && request.resource.data.cantidad is number
+                      && request.resource.data.cantidad != 0
+                      && fechaValida(request.resource.data.fecha)
+                      && firmadoPorMi('quien');
+        allow update, delete: if false;   // se corrige con un movimiento contrario
+      }
+      match /materiales/{id} {
+        allow read: if esMiembro();
+        allow create, update: if esMiembro() && request.resource.data.nombre is string;
+        // borrar un material dejaría sus movimientos huérfanos y la existencia sin nombre
+        allow delete: if false;
+      }
+
+      // ── gastos ────────────────────────────────────────────────
+      match /gastos/{id} {
+        allow read:   if esMiembro();
+        allow create: if operaDinero()
+                      && request.resource.data.concepto is string
+                      && montoValido(request.resource.data.montoCent)
+                      && fechaValida(request.resource.data.fecha)
+                      && firmadoPorMi('quien');
+        allow update: if operaDinero();
+        allow delete: if esDuena();
+      }
+
+      // ── pendientes ────────────────────────────────────────────
+      match /tareas/{id} {
+        allow read: if esMiembro();
+        allow create, update: if esMiembro() && request.resource.data.titulo is string;
+        allow delete: if esDuena();
+      }
+
+      // ── configuración del negocio ─────────────────────────────
+      match /config/{doc} {
+        allow read: if esMiembro();
+        allow write: if esDuena();
+      }
+    }
+
+    // ── nada fuera de un negocio ───────────────────────────────
+    // Firestore ya niega por defecto; esto queda explícito como recordatorio
+    // de que aquí NUNCA debe aparecer un `if request.auth != null` general.
+    match /{documento=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// =====================================================================
+//  REGLAS DE ARRANQUE — TEMPORALES. No dejar puestas.
+// =====================================================================
+//
+//  Existen solo para resolver el huevo y la gallina del primer día: las
+//  reglas de verdad dicen que solo un miembro con rol 'duena' administra
+//  miembros, y el primer día no hay ninguno, así que nadie puede crear
+//  al primero.
+//
+//  Esta versión permite escribir la colección de miembros a UN correo
+//  concreto y a nadie más. Todo lo demás sigue cerrado.
+//
+//  Se publican, se siembran los cuatro miembros y se vuelve de inmediato
+//  a firestore.rules. La comprobación de que se cerró es que este correo
+//  deje de poder tocar miembros por ser el correo, y solo pueda por ser
+//  'duena'.
+// =====================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /negocios/{negocio}/miembros/{uid} {
+      allow read, write: if request.auth != null
+        && request.auth.token.email == 'rl7103405+entrelineas@gmail.com';
+    }
+
+    match /{documento=**} {
+      allow read, write: if false;
+    }
+  }
+}

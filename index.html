@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#A2564A">
+<title>Entre Líneas · gestión</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Jost:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Paleta heredada de la página pública de Entre Líneas. Los rosas YA están medidos
+   contra WCAG AA en el navegador: el rosa de marca no da contraste para texto blanco,
+   por eso hay tres tonos distintos según el uso. Si alguien cambia uno, hay que volver
+   a medir. */
+:root{
+  --tinta:#3D2B27; --tinta-suave:#5C4741; --gris:#6E5F59;
+  --crema:#FDF7F4; --hueso:#F9EDE8; --arena:#EFDDD6;
+  --rosa:#C98A80; --rosa-fuerte:#A2564A; --rosa-borde:#BB7466; --rosa-hondo:#95584E;
+  --rosa-claro:#F0D9D3; --rosa-fondo:#FAEDE8; --rosa-humo:#FEF7F4;
+  --blanco:#FFFFFF;
+  --ambar:#8A6A1F; --ambar-fondo:#FBF1DA;
+  --rojo:#9B3B32; --rojo-fondo:#FBE9E7;
+  --verde:#40705C; --verde-fondo:#E8F1EC;
+  --display:'Cormorant Garamond',Georgia,serif;
+  --cuerpo:'Jost','Segoe UI',Arial,sans-serif;
+  --r:14px; --sombra:0 1px 2px rgba(61,43,39,.06),0 8px 24px rgba(61,43,39,.06);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--crema);color:var(--tinta);font-family:var(--cuerpo);
+  font-size:15px;line-height:1.5;-webkit-text-size-adjust:100%}
+h1,h2,h3{font-family:var(--display);font-weight:600;margin:0;line-height:1.15}
+button{font-family:inherit;font-size:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:16px;color:var(--tinta);
+  background:var(--rosa-humo);border:1px solid var(--rosa-borde);border-radius:10px;
+  padding:10px 12px;width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--rosa-fuerte);outline-offset:1px}
+label{display:block;font-size:12.5px;font-weight:500;color:var(--tinta-suave);margin-bottom:4px}
+.campo{margin-bottom:12px}
+.fila2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:560px){.fila2{grid-template-columns:1fr}}
+
+/* ── estructura ─────────────────────────────────────────────── */
+.envoltura{max-width:1100px;margin:0 auto;padding:0 16px 90px}
+.barra{position:sticky;top:0;z-index:20;background:var(--crema);
+  border-bottom:1px solid var(--arena);padding:12px 0 0}
+.barra-alto{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  max-width:1100px;margin:0 auto;padding:0 16px}
+.marca{font-family:var(--display);font-size:22px;letter-spacing:.01em}
+.marca b{color:var(--rosa-hondo);font-weight:600}
+.quien{font-size:12.5px;color:var(--gris);text-align:right;line-height:1.3}
+.nav{display:flex;gap:2px;overflow-x:auto;max-width:1100px;margin:10px auto 0;padding:0 16px;
+  scrollbar-width:none}
+.nav::-webkit-scrollbar{display:none}
+.nav button{background:none;border:0;padding:10px 14px;color:var(--gris);font-weight:500;
+  border-bottom:2px solid transparent;white-space:nowrap}
+.nav button[aria-current="true"]{color:var(--rosa-hondo);border-bottom-color:var(--rosa-fuerte)}
+.pagina{display:none;padding-top:20px}
+.pagina.activa{display:block}
+.seccion{margin-bottom:26px}
+.titulo{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+.titulo h2{font-size:24px}
+.sub{font-size:13px;color:var(--gris)}
+
+.tarjeta{background:var(--blanco);border:1px solid var(--arena);border-radius:var(--r);
+  padding:16px;box-shadow:var(--sombra)}
+.tarjeta+.tarjeta{margin-top:12px}
+.rejilla{display:grid;gap:12px}
+@media(min-width:720px){.rejilla.dos{grid-template-columns:1fr 1fr}
+  .rejilla.tres{grid-template-columns:repeat(3,1fr)}}
+
+.btn{background:var(--rosa-fuerte);color:var(--blanco);border:0;border-radius:999px;
+  padding:11px 20px;font-weight:500}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.suave{background:var(--rosa-claro);color:var(--rosa-hondo)}
+.btn.linea{background:none;border:1px solid var(--rosa-borde);color:var(--rosa-hondo)}
+.btn.chico{padding:7px 14px;font-size:13.5px}
+
+.pastilla{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;
+  font-weight:500;white-space:nowrap}
+.p-rojo{background:var(--rojo-fondo);color:var(--rojo)}
+.p-ambar{background:var(--ambar-fondo);color:var(--ambar)}
+.p-verde{background:var(--verde-fondo);color:var(--verde)}
+.p-rosa{background:var(--rosa-claro);color:var(--rosa-hondo)}
+.p-gris{background:var(--hueso);color:var(--gris)}
+
+.vacio{text-align:center;color:var(--gris);padding:28px 16px;font-size:14px}
+.aviso{border-radius:12px;padding:12px 14px;font-size:13.5px;margin-bottom:12px}
+.aviso.falta{background:var(--ambar-fondo);color:var(--ambar);border:1px solid #E8D5A8}
+.aviso.mal{background:var(--rojo-fondo);color:var(--rojo)}
+.aviso.bien{background:var(--verde-fondo);color:var(--verde)}
+.nota{font-size:12.5px;color:var(--gris)}
+.monto{font-variant-numeric:tabular-nums;font-weight:600}
+.neg{color:var(--rojo)} .pos{color:var(--verde)}
+
+.lista{list-style:none;margin:0;padding:0}
+.reng{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;
+  padding:12px 0;border-bottom:1px solid var(--arena)}
+.reng:last-child{border-bottom:0}
+.reng-cuerpo{min-width:0;flex:1}
+.reng-tit{font-weight:500}
+.reng-meta{font-size:12.5px;color:var(--gris);margin-top:2px}
+.reng-lado{text-align:right;white-space:nowrap}
+
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:500;color:var(--gris);font-size:12.5px;
+  border-bottom:1px solid var(--arena);padding:8px 6px}
+td{padding:9px 6px;border-bottom:1px solid var(--arena)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.desliza{overflow-x:auto}
+
+dialog{border:0;border-radius:18px;padding:0;max-width:560px;width:calc(100% - 32px);
+  box-shadow:0 20px 60px rgba(61,43,39,.25)}
+dialog::backdrop{background:rgba(61,43,39,.35)}
+.modal-alto{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:18px 20px 0}
+.modal-cuerpo{padding:16px 20px 20px}
+.cerrar{background:none;border:0;font-size:26px;line-height:1;color:var(--gris);padding:0 4px}
+
+#aviso-flotante{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);
+  background:var(--tinta);color:var(--blanco);padding:12px 20px;border-radius:999px;
+  font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:100;max-width:90vw;
+  text-align:center}
+#aviso-flotante.ver{opacity:1;transform:translateX(-50%) translateY(0)}
+
+#pantalla-acceso{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px}
+#pantalla-acceso .tarjeta{max-width:380px;width:100%}
+.punto{width:8px;height:8px;border-radius:50%;background:var(--arena);display:inline-block;
+  vertical-align:middle;margin-right:6px}
+.punto.ok{background:var(--verde)} .punto.mal{background:var(--rojo)}
+.pie{text-align:center;color:var(--gris);font-size:12px;padding:24px 0 8px}
+</style>
+</head>
+<body>
+
+<!-- ══ ACCESO ══════════════════════════════════════════════════ -->
+<div id="pantalla-acceso">
+  <div class="tarjeta">
+    <h1 style="font-size:28px">Entre <b style="color:var(--rosa-hondo)">Líneas</b></h1>
+    <p class="sub" style="margin:6px 0 18px">pedidos, cuentas e inventario</p>
+    <div class="campo"><label for="correo">correo</label>
+      <input type="email" id="correo" autocomplete="username" inputmode="email"></div>
+    <div class="campo"><label for="clave">contraseña</label>
+      <input type="password" id="clave" autocomplete="current-password"></div>
+    <button class="btn" id="btn-entrar" style="width:100%">entrar</button>
+    <p id="error-acceso" class="aviso mal" hidden style="margin-top:12px"></p>
+  </div>
+</div>
+
+<!-- ══ APP ═════════════════════════════════════════════════════ -->
+<div id="app" hidden>
+  <header class="barra">
+    <div class="barra-alto">
+      <div class="marca">Entre <b>Líneas</b></div>
+      <div style="display:flex;align-items:center;gap:14px">
+        <div class="quien"><span class="punto" id="punto-sync"></span><span id="quien-soy">—</span></div>
+        <button class="btn linea chico" id="btn-salir">salir</button>
+      </div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+  </header>
+
+  <main class="envoltura">
+    <!-- PEDIDOS -->
+    <section class="pagina activa" id="pg-pedidos">
+      <div class="titulo">
+        <div><h2>Pedidos</h2>
+          <p class="sub">ordenados solos: primero lo que se vence antes</p></div>
+        <button class="btn" id="btn-nuevo-pedido">+ pedido</button>
+      </div>
+      <div id="avisos-pedidos"></div>
+      <div id="cola-pedidos"></div>
+    </section>
+
+    <!-- COBROS -->
+    <section class="pagina" id="pg-cobros">
+      <div class="titulo">
+        <div><h2>Cuentas por cobrar</h2>
+          <p class="sub">lo que falta que te paguen, de lo más viejo a lo más nuevo</p></div>
+      </div>
+      <div class="rejilla tres" id="resumen-cobros" style="margin-bottom:16px"></div>
+      <div id="lista-cobros"></div>
+    </section>
+
+    <!-- INVENTARIO -->
+    <section class="pagina" id="pg-inventario">
+      <div class="titulo">
+        <div><h2>Inventario</h2>
+          <p class="sub">lo que tienes contra lo que ya prometiste</p></div>
+        <button class="btn" id="btn-nuevo-material">+ material</button>
+      </div>
+      <div id="avisos-inventario"></div>
+      <div id="tabla-inventario"></div>
+    </section>
+
+    <!-- DINERO -->
+    <section class="pagina" id="pg-dinero">
+      <div class="titulo">
+        <div><h2>Dinero</h2>
+          <p class="sub" id="sub-semana">la semana</p></div>
+        <button class="btn" id="btn-nuevo-gasto">+ gasto</button>
+      </div>
+      <div class="rejilla tres" id="resumen-dinero" style="margin-bottom:16px"></div>
+      <div id="detalle-dinero"></div>
+    </section>
+
+    <!-- EQUIPO -->
+    <section class="pagina" id="pg-equipo">
+      <div class="titulo">
+        <div><h2>Pendientes</h2>
+          <p class="sub">quién hace qué</p></div>
+        <button class="btn" id="btn-nueva-tarea">+ pendiente</button>
+      </div>
+      <div id="lista-tareas"></div>
+    </section>
+  </main>
+
+  <p class="pie" id="version-app">—</p>
+</div>
+
+<div id="aviso-flotante" role="status" aria-live="polite"></div>
+
+<!-- ══ DIÁLOGOS ════════════════════════════════════════════════ -->
+<dialog id="dlg">
+  <div class="modal-alto"><h3 id="dlg-titulo">—</h3>
+    <button class="cerrar" id="dlg-cerrar" aria-label="cerrar">&times;</button></div>
+  <div class="modal-cuerpo" id="dlg-cuerpo"></div>
+</dialog>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getFirestore, doc, getDoc, setDoc, collection, addDoc, onSnapshot,
+         query, orderBy, runTransaction, serverTimestamp, updateDoc }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+
+// ═══════════════════════════════════════════════════════════════
+//  CONFIGURACIÓN — pendiente de sustituir
+// ═══════════════════════════════════════════════════════════════
+// Estos seis valores salen de la consola de Firebase del proyecto NUEVO de Entre Líneas
+// (no del proyecto personal: aquí hay datos de clientes de terceros). Mientras digan
+// PENDIENTE la app no puede conectarse, y lo dice en pantalla en vez de fallar sola.
+const firebaseConfig = {
+  apiKey:            'AIzaSyCXc2Yv3WBv8aCdYbELyFGsXMr7ggNe5pQ',
+  authDomain:        'entrelineas-gestion.firebaseapp.com',
+  projectId:         'entrelineas-gestion',
+  storageBucket:     'entrelineas-gestion.firebasestorage.app',
+  messagingSenderId: '904851029446',
+  appId:             '1:904851029446:web:adffaf4b66273e761846c7'
+};
+// Todo cuelga de un negocio, aunque hoy solo haya uno: si mañana esta app se le vende a
+// otro taller, no hay que migrar ni un documento.
+const NEGOCIO = 'entrelineas';
+const RAIZ = 'negocios/' + NEGOCIO;
+
+const SIN_CONFIGURAR = Object.values(firebaseConfig).some(v => v === 'PENDIENTE');
+let db = null, auth = null;
+if (!SIN_CONFIGURAR) {
+  const app = initializeApp(firebaseConfig, NEGOCIO);
+  db = getFirestore(app);
+  auth = getAuth(app);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DINERO EN CENTAVOS
+// ═══════════════════════════════════════════════════════════════
+// Todo importe se guarda como ENTERO de centavos. Con decimales, 0.1+0.2 no da 0.3 y los
+// saldos terminan con centavos fantasma que nadie sabe explicar.
+const aCent = n => Math.round(Number(n) * 100);
+function dinero(c) {
+  const v = Number.isFinite(c) ? c : 0;   // un dato corrupto se muestra como $0.00, no como NaN
+  return '$' + (v / 100).toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FECHAS — siempre locales
+// ═══════════════════════════════════════════════════════════════
+// YYYY-MM-DD leído con new Date() se interpreta como UTC y de noche en México muestra el
+// día anterior. Todo pasa por aquí.
+const fechaLocal = f => new Date(f + 'T00:00:00');
+function hoyISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+const esFechaValida = f => /^\d{4}-\d{2}-\d{2}$/.test(f) && !isNaN(fechaLocal(f).getTime());
+function diaHabil(d) { const n = d.getDay(); return n !== 0 && n !== 6; }
+// Días hábiles entre dos fechas (sin contar el día de inicio). No conoce días festivos:
+// es una estimación y así está redactada en pantalla, nunca como promesa.
+function habilesEntre(desdeISO, hastaISO) {
+  if (!esFechaValida(desdeISO) || !esFechaValida(hastaISO)) return null;
+  const a = fechaLocal(desdeISO), b = fechaLocal(hastaISO);
+  const signo = b >= a ? 1 : -1;
+  let n = 0; const cur = new Date(a);
+  while (cur.getTime() !== b.getTime()) {
+    cur.setDate(cur.getDate() + signo);
+    if (diaHabil(cur)) n += signo;
+  }
+  return n;
+}
+function restaHabiles(fISO, n) {
+  const d = fechaLocal(fISO);
+  let quedan = n;
+  while (quedan > 0) { d.setDate(d.getDate() - 1); if (diaHabil(d)) quedan--; }
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+const fechaCorta = f => esFechaValida(f)
+  ? fechaLocal(f).toLocaleDateString('es-MX',{day:'numeric',month:'short'}) : '—';
+
+// Lo único de logística que Gaby dio: los envíos fuera de Puebla piden 2 días hábiles de
+// paquetería y ella prefiere 3 de colchón. No es una suposición, es dato suyo.
+const DIAS_PAQUETERIA = 3;
+
+// ═══════════════════════════════════════════════════════════════
+//  ESTADO
+// ═══════════════════════════════════════════════════════════════
+const ESTADOS = ['nuevo','proceso','listo','entregado','cancelado'];
+const ABIERTOS = ['nuevo','proceso','listo'];
+const ROLES = {duena:'dueña', socia:'socia', apoyo:'apoyo'};
+
+const estado = {
+  usuario: null, miembro: null,
+  pedidos: [], cobros: [], materiales: [], invMovs: [], gastos: [], tareas: [], miembros: [],
+  catalogo: {piezas: [], cuentas: []},
+  cargado: {}
+};
+let desuscribir = [];
+
+// ═══════════════════════════════════════════════════════════════
+//  UTILIDADES DE PANTALLA
+// ═══════════════════════════════════════════════════════════════
+// Los nombres de clientes y las notas los escriben personas: nunca van a innerHTML sin
+// pasar por aquí.
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function avisar(msg) {
+  const el = document.getElementById('aviso-flotante');
+  el.textContent = msg; el.classList.add('ver');
+  clearTimeout(avisar._t); avisar._t = setTimeout(() => el.classList.remove('ver'), 2600);
+}
+function punto(cual) {
+  document.getElementById('punto-sync').className = 'punto ' + (cual || '');
+}
+const $ = id => document.getElementById(id);
+
+// ═══════════════════════════════════════════════════════════════
+//  DERIVADOS — nada de esto se guarda, todo se calcula
+// ═══════════════════════════════════════════════════════════════
+// Un saldo guardado se descuadra en cuanto alguien edita un cobro desde otro teléfono.
+// Los cobros son un LIBRO INMUTABLE: para corregir se agrega una reversión, no se borra.
+function cobrosDe(pedidoId) { return estado.cobros.filter(c => c.pedidoId === pedidoId); }
+function pagadoDe(pedidoId) {
+  return cobrosDe(pedidoId).reduce((s,c) =>
+    s + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+}
+// El saldo NO se trunca en cero a propósito: si sale negativo es un sobrepago, y eso hay
+// que verlo, no esconderlo.
+function saldoDe(p) { return (p.totalCent || 0) - pagadoDe(p.id); }
+
+// La fecha que de verdad manda. Para un envío foráneo la pieza tiene que estar lista
+// antes, porque después vienen los días de paquetería.
+function fechaOperativa(p) {
+  const f = p.fechaComprometida;
+  if (!esFechaValida(f)) return null;
+  return p.entrega === 'foraneo' ? restaHabiles(f, DIAS_PAQUETERIA) : f;
+}
+// Orden de la cola. Lo urgente primero, y las excepciones hasta arriba porque son las que
+// se pierden: sin fecha confirmada, vencidas, o listas y sin enviar.
+function urgencia(p) {
+  const fo = fechaOperativa(p);
+  const dias = fo ? habilesEntre(hoyISO(), fo) : null;
+  if (!esFechaValida(p.fechaComprometida)) return {rango:0, dias:null, texto:'falta confirmar la fecha', clase:'p-ambar'};
+  if (dias !== null && dias < 0) return {rango:1, dias, texto:'se pasó la fecha', clase:'p-rojo'};
+  if (p.estado === 'listo' && p.entrega === 'foraneo') return {rango:2, dias, texto:'lista, falta enviarla', clase:'p-ambar'};
+  if (dias !== null && dias <= 1) return {rango:3, dias, texto:'hoy o mañana', clase:'p-rojo'};
+  if (dias !== null && dias <= 3) return {rango:4, dias, texto:'quedan ' + dias + ' días hábiles', clase:'p-ambar'};
+  return {rango:5, dias, texto:'quedan ' + dias + ' días hábiles', clase:'p-verde'};
+}
+function pedidosOrdenados() {
+  return estado.pedidos
+    .filter(p => ABIERTOS.includes(p.estado))
+    .map(p => ({p, u: urgencia(p)}))
+    .sort((a,b) => a.u.rango - b.u.rango
+      || ((a.u.dias ?? 9999) - (b.u.dias ?? 9999))
+      || String(a.p.folio).localeCompare(String(b.p.folio)));
+}
+
+// ── Inventario: la existencia SALE de los movimientos ──────────
+// Un campo "existencia" guardado y unos movimientos aparte son dos verdades que tarde o
+// temprano se contradicen. Aquí solo hay una.
+function existencia(materialId) {
+  return estado.invMovs
+    .filter(m => m.materialId === materialId)
+    .reduce((s,m) => s + (Number.isFinite(m.cantidad) ? m.cantidad : 0), 0);
+}
+// Lo que ya se sacó del almacén para un pedido concreto.
+function consumido(pedidoId, materialId) {
+  return estado.invMovs
+    .filter(m => m.pedidoId === pedidoId && m.materialId === materialId && m.tipo === 'consumo')
+    .reduce((s,m) => s + Math.abs(m.cantidad || 0), 0);
+}
+// El aviso que pidió Gaby: no pedido por pedido, sino TODOS los abiertos a la vez.
+// A lo que pide cada pedido se le resta lo que ya se le entregó, si no se contaría dos
+// veces: una en el almacén (que ya bajó) y otra en la demanda.
+function faltantes() {
+  const demanda = new Map();
+  estado.pedidos.filter(p => ABIERTOS.includes(p.estado)).forEach(p => {
+    (p.renglones || []).forEach(r => {
+      (r.receta || []).forEach(ing => {
+        const necesita = (ing.cantidad || 0) * (r.cantidad || 0);
+        const ya = consumido(p.id, ing.materialId);
+        const pend = Math.max(0, necesita - ya);
+        if (pend <= 0) return;
+        const d = demanda.get(ing.materialId) || {cant:0, pedidos:new Set()};
+        d.cant += pend; d.pedidos.add(p.folio);
+        demanda.set(ing.materialId, d);
+      });
+    });
+  });
+  const salida = [];
+  demanda.forEach((d, materialId) => {
+    const mat = estado.materiales.find(m => m.id === materialId);
+    if (!mat) return;
+    const hay = existencia(materialId);
+    const falta = d.cant - hay;
+    if (falta > 0) salida.push({material:mat, necesita:d.cant, hay, falta, pedidos:[...d.pedidos]});
+  });
+  return salida.sort((a,b) => b.falta - a.falta);
+}
+
+// ── La semana, que es como Gaby quiere cuadrar ─────────────────
+function semanaActual() {
+  const d = new Date(); const dia = (d.getDay() + 6) % 7; // lunes = 0
+  const lunes = new Date(d); lunes.setDate(d.getDate() - dia); lunes.setHours(0,0,0,0);
+  const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 7);
+  return {desde: lunes, hasta: domingo};
+}
+const enSemana = (fISO, s) => esFechaValida(fISO)
+  && fechaLocal(fISO) >= s.desde && fechaLocal(fISO) < s.hasta;
+
+// ═══════════════════════════════════════════════════════════════
+//  PANTALLAS
+// ═══════════════════════════════════════════════════════════════
+const PAGINAS = [
+  {id:'pedidos',    nombre:'pedidos'},
+  {id:'cobros',     nombre:'cuentas'},
+  {id:'inventario', nombre:'inventario'},
+  {id:'dinero',     nombre:'dinero'},
+  {id:'equipo',     nombre:'pendientes'}
+];
+let paginaActual = 'pedidos';
+function pintarNav() {
+  $('nav').innerHTML = PAGINAS.map(p =>
+    `<button data-pagina="${p.id}" aria-current="${p.id === paginaActual}">${esc(p.nombre)}</button>`
+  ).join('');
+  $('nav').querySelectorAll('button').forEach(b =>
+    b.addEventListener('click', () => irA(b.dataset.pagina)));
+}
+function irA(id) {
+  paginaActual = id;
+  PAGINAS.forEach(p => $('pg-' + p.id).classList.toggle('activa', p.id === id));
+  pintarNav();
+  pintarTodo();
+}
+
+// ── Pedidos ────────────────────────────────────────────────────
+function pintarPedidos() {
+  const cola = pedidosOrdenados();
+  const cont = $('cola-pedidos');
+  if (!cola.length) {
+    cont.innerHTML = `<div class="tarjeta"><p class="vacio">Todavía no hay pedidos abiertos.<br>
+      Toca <b>+ pedido</b> para capturar el primero.</p></div>`;
+    return;
+  }
+  cont.innerHTML = cola.map(({p,u}) => {
+    const saldo = saldoDe(p);
+    const fo = fechaOperativa(p);
+    const cuando = p.entrega === 'foraneo'
+      ? `entrega ${fechaCorta(p.fechaComprometida)} · sale del taller ${fechaCorta(fo)}`
+      : `entrega ${fechaCorta(p.fechaComprometida)}`;
+    const piezas = (p.renglones||[]).map(r =>
+      `${r.cantidad}× ${esc(r.nombre||'pieza')}`).join(' · ') || 'sin piezas capturadas';
+    return `<div class="tarjeta">
+      <div class="reng" style="border:0;padding:0">
+        <div class="reng-cuerpo">
+          <div class="reng-tit">${esc(p.cliente?.nombre || 'sin nombre')}
+            <span class="nota">· ${esc(p.folio||'')}</span></div>
+          <div class="reng-meta">${esc(piezas)}</div>
+          <div class="reng-meta">${esc(cuando)}${p.entrega === 'foraneo'
+            ? ' · ' + esc(p.ciudad || 'foráneo') : ' · Puebla'}</div>
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+            <span class="pastilla ${u.clase}">${esc(u.texto)}</span>
+            <span class="pastilla p-gris">${esc(p.estado)}</span>
+            ${saldo > 0 ? `<span class="pastilla p-rojo">debe ${dinero(saldo)}</span>`
+              : `<span class="pastilla p-verde">pagado</span>`}
+          </div>
+        </div>
+        <div class="reng-lado">
+          <div class="monto">${dinero(p.totalCent)}</div>
+          <button class="btn suave chico" style="margin-top:8px"
+            data-pedido="${esc(p.id)}">ver</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  cont.querySelectorAll('[data-pedido]').forEach(b =>
+    b.addEventListener('click', () => abrirPedido(b.dataset.pedido)));
+
+  // El aviso de material va aquí arriba también: es donde se decide qué se trabaja hoy.
+  const falta = faltantes();
+  $('avisos-pedidos').innerHTML = falta.length
+    ? `<div class="aviso falta"><b>Con lo que hay en inventario no te alcanza.</b><br>` +
+      falta.slice(0,4).map(f => `Faltan ${f.falta} ${esc(f.material.unidad||'')} de
+        ${esc(f.material.nombre)} (tienes ${f.hay}, necesitas ${f.necesita})`).join('<br>') +
+      (falta.length > 4 ? `<br>y ${falta.length - 4} material(es) más` : '') +
+      `<br><span class="nota">Puedes seguir capturando y trabajando: esto es un aviso, no un bloqueo.</span></div>`
+    : '';
+}
+
+// ── Cuentas por cobrar ─────────────────────────────────────────
+function pintarCobros() {
+  const conSaldo = estado.pedidos
+    .filter(p => p.estado !== 'cancelado')
+    .map(p => ({p, saldo: saldoDe(p)}))
+    .filter(x => Math.abs(x.saldo) >= 1)
+    .sort((a,b) => String(a.p.fechaComprometida||'').localeCompare(String(b.p.fechaComprometida||'')));
+
+  const total = conSaldo.reduce((s,x) => s + Math.max(0, x.saldo), 0);
+  const s = semanaActual();
+  const cobradoSemana = estado.cobros.filter(c => enSemana(c.fecha, s))
+    .reduce((a,c) => a + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+
+  $('resumen-cobros').innerHTML = `
+    <div class="tarjeta"><div class="sub">te deben en total</div>
+      <div class="monto" style="font-size:26px">${dinero(total)}</div></div>
+    <div class="tarjeta"><div class="sub">pedidos por cobrar</div>
+      <div class="monto" style="font-size:26px">${conSaldo.filter(x=>x.saldo>0).length}</div></div>
+    <div class="tarjeta"><div class="sub">cobrado esta semana</div>
+      <div class="monto" style="font-size:26px">${dinero(cobradoSemana)}</div></div>`;
+
+  $('lista-cobros').innerHTML = !conSaldo.length
+    ? `<div class="tarjeta"><p class="vacio">Nadie te debe nada ahora mismo.</p></div>`
+    : `<div class="tarjeta"><ul class="lista">` + conSaldo.map(({p,saldo}) => `
+        <li class="reng">
+          <div class="reng-cuerpo">
+            <div class="reng-tit">${esc(p.cliente?.nombre || 'sin nombre')}</div>
+            <div class="reng-meta">${esc(p.folio||'')} · entrega ${fechaCorta(p.fechaComprometida)}
+              · de ${dinero(p.totalCent)} lleva pagado ${dinero(pagadoDe(p.id))}</div>
+          </div>
+          <div class="reng-lado">
+            <div class="monto ${saldo > 0 ? 'neg' : 'pos'}">${dinero(saldo)}</div>
+            <button class="btn suave chico" style="margin-top:6px"
+              data-cobrar="${esc(p.id)}">registrar pago</button>
+          </div>
+        </li>`).join('') + `</ul></div>`;
+  $('lista-cobros').querySelectorAll('[data-cobrar]').forEach(b =>
+    b.addEventListener('click', () => dialogoCobro(b.dataset.cobrar)));
+}
+
+// ── Inventario ─────────────────────────────────────────────────
+function pintarInventario() {
+  const falta = faltantes();
+  $('avisos-inventario').innerHTML = falta.length
+    ? `<div class="aviso falta"><b>Necesitas comprar para cumplir lo que ya prometiste:</b><br>` +
+      falta.map(f => `${esc(f.material.nombre)}: te faltan <b>${f.falta}</b>
+        ${esc(f.material.unidad||'')} · para ${esc(f.pedidos.join(', '))}`).join('<br>') +
+      `</div>`
+    : (estado.materiales.length
+        ? `<div class="aviso bien">Con lo que tienes alcanza para todos los pedidos abiertos.</div>` : '');
+
+  $('tabla-inventario').innerHTML = !estado.materiales.length
+    ? `<div class="tarjeta"><p class="vacio">Todavía no hay materiales.<br>
+        Captura los que usas —marcos, figuras, piedras, cajas— y cuánto lleva cada pieza.</p></div>`
+    : `<div class="tarjeta desliza"><table>
+        <thead><tr><th>material</th><th class="num">tienes</th><th class="num">comprometido</th>
+          <th class="num">queda</th><th></th></tr></thead>
+        <tbody>` + estado.materiales.map(m => {
+          const hay = existencia(m.id);
+          const f = falta.find(x => x.material.id === m.id);
+          const comprometido = f ? f.necesita : demandaDe(m.id);
+          const queda = hay - comprometido;
+          return `<tr>
+            <td>${esc(m.nombre)}<div class="nota">${esc(m.unidad||'pieza')}</div></td>
+            <td class="num">${hay}</td>
+            <td class="num">${comprometido}</td>
+            <td class="num ${queda < 0 ? 'neg' : ''}">${queda}</td>
+            <td class="num"><button class="btn suave chico" data-mov="${esc(m.id)}">movimiento</button></td>
+          </tr>`;
+        }).join('') + `</tbody></table></div>`;
+  $('tabla-inventario').querySelectorAll('[data-mov]').forEach(b =>
+    b.addEventListener('click', () => dialogoMovimiento(b.dataset.mov)));
+}
+function demandaDe(materialId) {
+  let t = 0;
+  estado.pedidos.filter(p => ABIERTOS.includes(p.estado)).forEach(p =>
+    (p.renglones||[]).forEach(r => (r.receta||[]).forEach(ing => {
+      if (ing.materialId !== materialId) return;
+      t += Math.max(0, (ing.cantidad||0) * (r.cantidad||0) - consumido(p.id, materialId));
+    })));
+  return t;
+}
+
+// ── Dinero ─────────────────────────────────────────────────────
+function pintarDinero() {
+  const s = semanaActual();
+  $('sub-semana').textContent = 'semana del ' +
+    s.desde.toLocaleDateString('es-MX',{day:'numeric',month:'long'});
+  const entro = estado.cobros.filter(c => enSemana(c.fecha, s))
+    .reduce((a,c) => a + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+  const salio = estado.gastos.filter(g => enSemana(g.fecha, s))
+    .reduce((a,g) => a + (g.montoCent||0), 0);
+
+  $('resumen-dinero').innerHTML = `
+    <div class="tarjeta"><div class="sub">entró</div>
+      <div class="monto pos" style="font-size:26px">${dinero(entro)}</div></div>
+    <div class="tarjeta"><div class="sub">salió</div>
+      <div class="monto neg" style="font-size:26px">${dinero(salio)}</div></div>
+    <div class="tarjeta"><div class="sub">te queda</div>
+      <div class="monto" style="font-size:26px">${dinero(entro - salio)}</div></div>`;
+
+  // Por cuenta: Gaby dijo que a veces le cae a su tarjeta y a veces a la de Marce.
+  const porCuenta = new Map();
+  estado.cobros.filter(c => enSemana(c.fecha, s)).forEach(c => {
+    const k = c.cuenta || 'sin especificar';
+    porCuenta.set(k, (porCuenta.get(k)||0) + (c.tipo==='reversion' ? -(c.montoCent||0) : (c.montoCent||0)));
+  });
+  const gastosSemana = estado.gastos.filter(g => enSemana(g.fecha, s))
+    .sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
+
+  $('detalle-dinero').innerHTML = `
+    <div class="rejilla dos">
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">En qué cuenta entró</h3>
+        ${porCuenta.size ? `<ul class="lista">` + [...porCuenta].map(([k,v]) =>
+          `<li class="reng"><div class="reng-cuerpo">${esc(k)}</div>
+            <div class="reng-lado monto">${dinero(v)}</div></li>`).join('') + `</ul>`
+          : `<p class="vacio">Sin cobros esta semana.</p>`}</div>
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Gastos de la semana</h3>
+        ${gastosSemana.length ? `<ul class="lista">` + gastosSemana.map(g =>
+          `<li class="reng"><div class="reng-cuerpo"><div class="reng-tit">${esc(g.concepto)}</div>
+            <div class="reng-meta">${esc(g.categoria||'')} · ${fechaCorta(g.fecha)}</div></div>
+            <div class="reng-lado monto neg">${dinero(g.montoCent)}</div></li>`).join('') + `</ul>`
+          : `<p class="vacio">Sin gastos capturados.</p>`}</div>
+    </div>`;
+}
+
+// ── Pendientes ─────────────────────────────────────────────────
+function pintarTareas() {
+  const abiertas = estado.tareas.filter(t => t.estado !== 'hecha')
+    .sort((a,b) => String(a.vence||'9999').localeCompare(String(b.vence||'9999')));
+  $('lista-tareas').innerHTML = !abiertas.length
+    ? `<div class="tarjeta"><p class="vacio">No hay pendientes.</p></div>`
+    : `<div class="tarjeta"><ul class="lista">` + abiertas.map(t => `
+        <li class="reng">
+          <div class="reng-cuerpo"><div class="reng-tit">${esc(t.titulo)}</div>
+            <div class="reng-meta">${esc(nombreDe(t.asignadaA))}${t.vence
+              ? ' · para el ' + fechaCorta(t.vence) : ''}</div></div>
+          <div class="reng-lado">
+            <button class="btn suave chico" data-hecha="${esc(t.id)}">hecha</button></div>
+        </li>`).join('') + `</ul></div>`;
+  $('lista-tareas').querySelectorAll('[data-hecha]').forEach(b =>
+    b.addEventListener('click', () => marcarTarea(b.dataset.hecha)));
+}
+const nombreDe = uid => (estado.miembros.find(m => m.id === uid)?.nombre) || 'sin asignar';
+
+function pintarTodo() {
+  if (!estado.usuario) return;
+  pintarPedidos(); pintarCobros(); pintarInventario(); pintarDinero(); pintarTareas();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VERSIÓN — sale del archivo publicado, no de un texto a mano
+// ═══════════════════════════════════════════════════════════════
+(function version() {
+  const el = $('version-app'); if (!el) return;
+  const d = new Date(document.lastModified);
+  el.textContent = isNaN(d.getTime()) ? 'versión desconocida'
+    : 'versión del ' + d.toLocaleDateString('es-MX',{day:'numeric',month:'short',year:'numeric'})
+      + ' · ' + d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+})();
+
+// ═══════════════════════════════════════════════════════════════
+//  ARRANQUE
+// ═══════════════════════════════════════════════════════════════
+if (SIN_CONFIGURAR) {
+  $('error-acceso').hidden = false;
+  $('error-acceso').innerHTML = 'Falta conectar Firebase.<br>' +
+    '<span class="nota">Sustituye los seis valores de <b>firebaseConfig</b> al inicio del script ' +
+    'por los del proyecto de Entre Líneas.</span>';
+  $('btn-entrar').disabled = true;
+}
+pintarNav();
+
+$('btn-entrar').addEventListener('click', entrar);
+$('clave').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+async function entrar() {
+  if (SIN_CONFIGURAR) return;
+  const correo = $('correo').value.trim(), clave = $('clave').value;
+  const err = $('error-acceso');
+  err.hidden = true;
+  if (!correo || !clave) { err.hidden = false; err.textContent = 'Escribe tu correo y tu contraseña.'; return; }
+  $('btn-entrar').disabled = true;
+  try {
+    await signInWithEmailAndPassword(auth, correo, clave);
+  } catch (e) {
+    err.hidden = false;
+    err.textContent = e.code === 'auth/invalid-credential'
+      ? 'Correo o contraseña incorrectos.' : 'No se pudo entrar. Revisa tu conexión.';
+    console.error('entrar', e);
+  } finally { $('btn-entrar').disabled = false; }
+}
+$('btn-salir').addEventListener('click', async () => {
+  desuscribir.forEach(u => { try { u(); } catch(e){} });
+  desuscribir = [];
+  await signOut(auth);
+});
+
+if (auth) onAuthStateChanged(auth, async u => {
+  estado.usuario = u || null;
+  if (!u) {
+    $('app').hidden = true; $('pantalla-acceso').hidden = false;
+    return;
+  }
+  // El rol vive en el negocio, no en el usuario: la misma persona podría entrar mañana a
+  // otro taller con otro rol.
+  try {
+    const snap = await getDoc(doc(db, RAIZ + '/miembros', u.uid));
+    estado.miembro = snap.exists() ? {id:u.uid, ...snap.data()} : null;
+  } catch(e) { console.error('miembro', e); estado.miembro = null; }
+
+  if (!estado.miembro || estado.miembro.activo === false) {
+    $('error-acceso').hidden = false;
+    $('error-acceso').textContent = 'Tu cuenta todavía no tiene acceso a Entre Líneas.';
+    await signOut(auth);
+    return;
+  }
+  $('pantalla-acceso').hidden = true; $('app').hidden = false;
+  $('quien-soy').textContent = (estado.miembro.nombre || u.email) +
+    ' · ' + (ROLES[estado.miembro.rol] || estado.miembro.rol || '');
+  escuchar();
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  DIÁLOGOS Y CAPTURA
+// ═══════════════════════════════════════════════════════════════
+function abrirDialogo(titulo, html, alGuardar) {
+  $('dlg-titulo').textContent = titulo;
+  $('dlg-cuerpo').innerHTML = html;
+  const d = $('dlg');
+  d.showModal();
+  const btn = $('dlg-cuerpo').querySelector('[data-guardar]');
+  if (btn) btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try { if (await alGuardar() !== false) d.close(); }
+    finally { btn.disabled = false; }
+  });
+}
+$('dlg-cerrar').addEventListener('click', () => $('dlg').close());
+
+// Un folio para poder nombrar el pedido en voz alta y encontrarlo. El del navegador NO
+// garantiza unicidad, por eso se comprueba contra los pedidos ya cargados antes de usarlo.
+function nuevoFolio() {
+  const d = new Date();
+  const base = 'EL-' + String(d.getFullYear()).slice(2) +
+    String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0');
+  let f, intento = 0;
+  do {
+    f = base + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+    intento++;
+  } while (estado.pedidos.some(p => p.folio === f) && intento < 50);
+  return f;
+}
+// Identifica cada intento de escritura: si el botón se pulsa dos veces o la transacción se
+// reintenta, el segundo registro se reconoce y no se duplica el dinero.
+const nuevaOp = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+
+function campoNum(id, etiqueta, extra = '') {
+  return `<div class="campo"><label for="${id}">${etiqueta}</label>
+    <input type="number" id="${id}" step="0.01" inputmode="decimal" ${extra}></div>`;
+}
+function selectCuentas(id) {
+  // Gaby: "a veces son en mi tarjeta, a veces son las de Marce". Si no se registra dónde
+  // cayó el dinero, la semana no cuadra nunca.
+  const opciones = estado.miembros.map(m => `<option value="${esc(m.nombre)}">${esc(m.nombre)}</option>`).join('');
+  return `<div class="campo"><label for="${id}">¿en qué cuenta entró?</label>
+    <select id="${id}">${opciones}<option value="efectivo">efectivo</option>
+    <option value="otra">otra</option></select></div>`;
+}
+
+// ── Alta de pedido ─────────────────────────────────────────────
+$('btn-nuevo-pedido').addEventListener('click', () => {
+  const hoy = hoyISO();
+  abrirDialogo('Nuevo pedido', `
+    <div class="campo"><label for="f-cliente">¿de quién es el pedido?</label>
+      <input type="text" id="f-cliente" maxlength="60" placeholder="nombre de la clienta"></div>
+    <div class="campo"><label for="f-tel">teléfono (opcional)</label>
+      <input type="tel" id="f-tel" maxlength="20"></div>
+    <div class="campo"><label for="f-pieza">¿qué le vas a hacer?</label>
+      <input type="text" id="f-pieza" maxlength="60" placeholder="cuadro LEGO, piedras, caja..."></div>
+    <div class="fila2">
+      <div class="campo"><label for="f-cant">cuántas</label>
+        <input type="number" id="f-cant" min="1" step="1" value="1" inputmode="numeric"></div>
+      ${campoNum('f-precio','precio por pieza','min="0"')}
+    </div>
+    <div class="fila2">
+      <div class="campo"><label for="f-entrega">entrega</label>
+        <select id="f-entrega"><option value="local">recoge en Puebla</option>
+          <option value="foraneo">envío foráneo</option></select></div>
+      <div class="campo"><label for="f-ciudad">ciudad (si es envío)</label>
+        <input type="text" id="f-ciudad" maxlength="60"></div>
+    </div>
+    <div class="fila2">
+      <div class="campo"><label for="f-solicitada">fecha que pidió la clienta</label>
+        <input type="date" id="f-solicitada" value="${hoy}"></div>
+      <div class="campo"><label for="f-comprometida">fecha que tú confirmas</label>
+        <input type="date" id="f-comprometida"></div>
+    </div>
+    <p class="nota" style="margin:-4px 0 12px">La fecha que confirmas es la que manda en la
+      cola. Si la dejas vacía, el pedido sube hasta arriba como <b>falta confirmar</b>: es a
+      propósito, para que no se te pierda sin fecha.</p>
+    <div class="campo"><label for="f-notas">detalles</label>
+      <textarea id="f-notas" rows="2" maxlength="500" placeholder="qué debe decir, colores, referencias..."></textarea></div>
+    <button class="btn" data-guardar style="width:100%">guardar pedido</button>
+  `, async () => {
+    const nombre = $('f-cliente').value.trim();
+    const pieza = $('f-pieza').value.trim();
+    const cant = parseInt($('f-cant').value, 10);
+    const precio = parseFloat($('f-precio').value);
+    if (!nombre) { avisar('Ponle el nombre de la clienta'); return false; }
+    if (!pieza) { avisar('Escribe qué pieza es'); return false; }
+    if (!Number.isInteger(cant) || cant < 1) { avisar('La cantidad debe ser 1 o más'); return false; }
+    if (!Number.isFinite(precio) || precio < 0) { avisar('Escribe el precio por pieza'); return false; }
+    const comprometida = $('f-comprometida').value;
+    if (comprometida && !esFechaValida(comprometida)) { avisar('La fecha confirmada no es válida'); return false; }
+    const entrega = $('f-entrega').value;
+    const totalCent = aCent(precio) * cant;
+    try {
+      await addDoc(collection(db, RAIZ + '/pedidos'), {
+        folio: nuevoFolio(),
+        cliente: {nombre, tel: $('f-tel').value.trim()},
+        // El renglón guarda su propio nombre y precio: si mañana cambia el catálogo, este
+        // pedido sigue diciendo lo que se acordó el día que se tomó.
+        renglones: [{id: nuevaOp(), nombre: pieza, cantidad: cant,
+                     precioUnitCent: aCent(precio), receta: []}],
+        totalCent,
+        estado: 'nuevo',
+        entrega,
+        ciudad: entrega === 'foraneo' ? $('f-ciudad').value.trim() : '',
+        // Son dos fechas distintas a propósito: lo que la clienta pidió no es lo que el
+        // taller prometió, y confundirlas es prometer algo que nadie confirmó.
+        fechaSolicitada: $('f-solicitada').value || hoyISO(),
+        fechaComprometida: comprometida || null,
+        notas: $('f-notas').value.trim(),
+        creadoPor: estado.usuario.uid,
+        creadoEn: serverTimestamp()
+      });
+      avisar('Pedido guardado');
+    } catch (e) { console.error('alta pedido', e); avisar('No se pudo guardar, revisa tu conexión'); return false; }
+  });
+});
+
+// ── Detalle de un pedido ───────────────────────────────────────
+function abrirPedido(id) {
+  const p = estado.pedidos.find(x => x.id === id);
+  if (!p) return;
+  const saldo = saldoDe(p);
+  const movs = cobrosDe(p.id).sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
+  abrirDialogo(p.cliente?.nombre || 'Pedido', `
+    <p class="nota">${esc(p.folio)} · ${esc(p.estado)}</p>
+    <div class="tarjeta" style="box-shadow:none;margin:12px 0">
+      ${(p.renglones||[]).map(r => `<div class="reng">
+        <div class="reng-cuerpo"><div class="reng-tit">${r.cantidad}× ${esc(r.nombre)}</div>
+          <div class="reng-meta">${dinero(r.precioUnitCent)} cada una</div></div>
+        <div class="reng-lado monto">${dinero((r.precioUnitCent||0)*(r.cantidad||0))}</div>
+      </div>`).join('')}
+      <div class="reng"><div class="reng-cuerpo"><b>ya pagó</b></div>
+        <div class="reng-lado monto pos">${dinero(pagadoDe(p.id))}</div></div>
+      <div class="reng"><div class="reng-cuerpo"><b>${saldo > 0 ? 'debe' : 'saldo'}</b></div>
+        <div class="reng-lado monto ${saldo > 0 ? 'neg' : 'pos'}">${dinero(saldo)}</div></div>
+    </div>
+    ${p.notas ? `<p class="nota" style="margin-bottom:12px">${esc(p.notas)}</p>` : ''}
+    ${movs.length ? `<p class="sub" style="margin-bottom:6px">pagos registrados</p>
+      <ul class="lista" style="margin-bottom:12px">` + movs.map(c => `<li class="reng">
+        <div class="reng-cuerpo">${fechaCorta(c.fecha)} · ${esc(c.cuenta||'')}
+          ${c.tipo === 'reversion' ? '<span class="pastilla p-rojo">corrección</span>' : ''}</div>
+        <div class="reng-lado monto">${c.tipo === 'reversion' ? '−' : ''}${dinero(c.montoCent)}</div>
+      </li>`).join('') + `</ul>` : ''}
+    <div class="campo"><label for="f-estado">estado</label>
+      <select id="f-estado">${ESTADOS.map(e =>
+        `<option value="${e}"${e === p.estado ? ' selected' : ''}>${e}</option>`).join('')}</select></div>
+    <div class="campo"><label for="f-comp2">fecha confirmada</label>
+      <input type="date" id="f-comp2" value="${esc(p.fechaComprometida || '')}"></div>
+    <button class="btn" data-guardar style="width:100%">guardar cambios</button>
+  `, async () => {
+    const nuevoEstado = $('f-estado').value;
+    const nuevaFecha = $('f-comp2').value;
+    if (!ESTADOS.includes(nuevoEstado)) { avisar('Estado no válido'); return false; }
+    if (nuevaFecha && !esFechaValida(nuevaFecha)) { avisar('Fecha no válida'); return false; }
+    try {
+      // update parcial: nunca se reescribe el documento entero, porque otra persona pudo
+      // haber tocado otro campo mientras este diálogo estaba abierto.
+      await updateDoc(doc(db, RAIZ + '/pedidos', p.id), {
+        estado: nuevoEstado, fechaComprometida: nuevaFecha || null
+      });
+      avisar('Pedido actualizado');
+    } catch (e) { console.error('editar pedido', e); avisar('No se pudo guardar'); return false; }
+  });
+}
+
+// ── Registrar un pago ──────────────────────────────────────────
+function dialogoCobro(pedidoId) {
+  const p = estado.pedidos.find(x => x.id === pedidoId);
+  if (!p) return;
+  const saldo = saldoDe(p);
+  abrirDialogo('Registrar pago', `
+    <p class="nota">${esc(p.cliente?.nombre||'')} · ${esc(p.folio)} · debe ${dinero(saldo)}</p>
+    ${campoNum('f-monto','cuánto te pagó','min="0"')}
+    ${selectCuentas('f-cuenta')}
+    <div class="campo"><label for="f-fecha">cuándo</label>
+      <input type="date" id="f-fecha" value="${hoyISO()}"></div>
+    <p class="nota" style="margin-bottom:12px">Los pagos no se borran ni se editan: si te
+      equivocas, se registra una corrección que deja ver qué pasó. Así el saldo siempre
+      cuadra con lo que de verdad entró.</p>
+    <button class="btn" data-guardar style="width:100%">registrar</button>
+  `, async () => {
+    const monto = parseFloat($('f-monto').value);
+    if (!Number.isFinite(monto) || monto <= 0) { avisar('Escribe cuánto te pagó'); return false; }
+    const fecha = $('f-fecha').value;
+    if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
+    try {
+      await addDoc(collection(db, RAIZ + '/cobros'), {
+        pedidoId, tipo: 'pago', montoCent: aCent(monto),
+        cuenta: $('f-cuenta').value, fecha,
+        registradoPor: estado.usuario.uid, opId: nuevaOp(), creadoEn: serverTimestamp()
+      });
+      avisar('Pago registrado');
+    } catch (e) { console.error('cobro', e); avisar('No se pudo registrar'); return false; }
+  });
+}
+
+// ── Materiales y movimientos ───────────────────────────────────
+$('btn-nuevo-material').addEventListener('click', () => {
+  abrirDialogo('Nuevo material', `
+    <div class="campo"><label for="f-mat">¿qué material es?</label>
+      <input type="text" id="f-mat" maxlength="50" placeholder="marcos, figuras LEGO, piedras..."></div>
+    <div class="campo"><label for="f-unidad">¿en qué lo cuentas?</label>
+      <input type="text" id="f-unidad" maxlength="20" placeholder="piezas, metros, paquetes"></div>
+    <p class="nota" style="margin-bottom:12px">Cuenta siempre en la unidad más chica que
+      uses. Si compras paquetes de ocho pero gastas de una en una, cuenta piezas.</p>
+    <button class="btn" data-guardar style="width:100%">guardar</button>
+  `, async () => {
+    const nombre = $('f-mat').value.trim();
+    if (!nombre) { avisar('Ponle nombre al material'); return false; }
+    try {
+      await addDoc(collection(db, RAIZ + '/materiales'), {
+        nombre, unidad: $('f-unidad').value.trim() || 'piezas', creadoEn: serverTimestamp()
+      });
+      avisar('Material agregado');
+    } catch (e) { console.error('material', e); avisar('No se pudo guardar'); return false; }
+  });
+});
+
+function dialogoMovimiento(materialId) {
+  const m = estado.materiales.find(x => x.id === materialId);
+  if (!m) return;
+  abrirDialogo('Movimiento de ' + m.nombre, `
+    <p class="nota">tienes ${existencia(materialId)} ${esc(m.unidad||'')}</p>
+    <div class="campo"><label for="f-tipo">qué pasó</label>
+      <select id="f-tipo">
+        <option value="compra">compré (entra)</option>
+        <option value="consumo">lo usé (sale)</option>
+        <option value="ajuste">corrección de conteo</option>
+      </select></div>
+    <div class="campo"><label for="f-cantidad">cuántas ${esc(m.unidad||'piezas')}</label>
+      <input type="number" id="f-cantidad" step="1" inputmode="numeric"></div>
+    ${campoNum('f-costo','cuánto te costó en total (opcional)','min="0"')}
+    <div class="campo"><label for="f-fechamov">cuándo</label>
+      <input type="date" id="f-fechamov" value="${hoyISO()}"></div>
+    <p class="nota" style="margin-bottom:12px">En una corrección puedes poner número
+      negativo si tenías de menos. Los movimientos tampoco se borran: se corrigen con otro.</p>
+    <button class="btn" data-guardar style="width:100%">registrar</button>
+  `, async () => {
+    const tipo = $('f-tipo').value;
+    const cant = parseFloat($('f-cantidad').value);
+    if (!Number.isFinite(cant) || cant === 0) { avisar('Escribe la cantidad'); return false; }
+    if (tipo !== 'ajuste' && cant < 0) { avisar('Usa una cantidad positiva; el signo lo pone la app'); return false; }
+    const fecha = $('f-fechamov').value;
+    if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
+    const costo = parseFloat($('f-costo').value);
+    // El signo lo decide el tipo, no la persona: así una compra nunca resta por error.
+    const cantidad = tipo === 'consumo' ? -Math.abs(cant) : (tipo === 'compra' ? Math.abs(cant) : cant);
+    try {
+      await addDoc(collection(db, RAIZ + '/invMovs'), {
+        materialId, tipo, cantidad, fecha,
+        costoCent: Number.isFinite(costo) && costo > 0 ? aCent(costo) : null,
+        quien: estado.usuario.uid, opId: nuevaOp(), creadoEn: serverTimestamp()
+      });
+      // Una compra de material también es dinero que salió: si no se registra, el gasto
+      // por material que ella pidió nunca va a existir.
+      if (tipo === 'compra' && Number.isFinite(costo) && costo > 0) {
+        await addDoc(collection(db, RAIZ + '/gastos'), {
+          concepto: 'compra de ' + m.nombre, categoria: 'material',
+          montoCent: aCent(costo), fecha, materialId,
+          cuenta: '', quien: estado.usuario.uid, creadoEn: serverTimestamp()
+        });
+      }
+      avisar('Movimiento registrado');
+    } catch (e) { console.error('movimiento', e); avisar('No se pudo registrar'); return false; }
+  });
+}
+
+// ── Gastos ─────────────────────────────────────────────────────
+$('btn-nuevo-gasto').addEventListener('click', () => {
+  abrirDialogo('Nuevo gasto', `
+    <div class="campo"><label for="f-concepto">en qué se fue</label>
+      <input type="text" id="f-concepto" maxlength="60" placeholder="paquetería, impresión, marcos..."></div>
+    <div class="campo"><label for="f-categoria">categoría</label>
+      <select id="f-categoria">
+        <option value="material">material</option>
+        <option value="envio">envío y paquetería</option>
+        <option value="herramienta">herramienta</option>
+        <option value="publicidad">publicidad</option>
+        <option value="otro">otro</option>
+      </select></div>
+    ${campoNum('f-montog','cuánto','min="0"')}
+    ${selectCuentas('f-cuentag')}
+    <div class="campo"><label for="f-fechag">cuándo</label>
+      <input type="date" id="f-fechag" value="${hoyISO()}"></div>
+    <button class="btn" data-guardar style="width:100%">guardar gasto</button>
+  `, async () => {
+    const concepto = $('f-concepto').value.trim();
+    const monto = parseFloat($('f-montog').value);
+    if (!concepto) { avisar('Escribe en qué se fue'); return false; }
+    if (!Number.isFinite(monto) || monto <= 0) { avisar('Escribe cuánto'); return false; }
+    const fecha = $('f-fechag').value;
+    if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
+    try {
+      await addDoc(collection(db, RAIZ + '/gastos'), {
+        concepto, categoria: $('f-categoria').value, montoCent: aCent(monto),
+        cuenta: $('f-cuentag').value, fecha,
+        quien: estado.usuario.uid, creadoEn: serverTimestamp()
+      });
+      avisar('Gasto guardado');
+    } catch (e) { console.error('gasto', e); avisar('No se pudo guardar'); return false; }
+  });
+});
+
+// ── Pendientes ─────────────────────────────────────────────────
+$('btn-nueva-tarea').addEventListener('click', () => {
+  abrirDialogo('Nuevo pendiente', `
+    <div class="campo"><label for="f-tarea">qué hay que hacer</label>
+      <input type="text" id="f-tarea" maxlength="80"></div>
+    <div class="campo"><label for="f-quien">quién lo hace</label>
+      <select id="f-quien">${estado.miembros.map(m =>
+        `<option value="${esc(m.id)}">${esc(m.nombre)}</option>`).join('')}</select></div>
+    <div class="campo"><label for="f-vence">para cuándo</label>
+      <input type="date" id="f-vence"></div>
+    <button class="btn" data-guardar style="width:100%">guardar</button>
+  `, async () => {
+    const titulo = $('f-tarea').value.trim();
+    if (!titulo) { avisar('Escribe qué hay que hacer'); return false; }
+    const vence = $('f-vence').value;
+    if (vence && !esFechaValida(vence)) { avisar('La fecha no es válida'); return false; }
+    try {
+      await addDoc(collection(db, RAIZ + '/tareas'), {
+        titulo, asignadaA: $('f-quien').value || null, estado: 'abierta',
+        vence: vence || null, creadoPor: estado.usuario.uid, creadoEn: serverTimestamp()
+      });
+      avisar('Pendiente guardado');
+    } catch (e) { console.error('tarea', e); avisar('No se pudo guardar'); return false; }
+  });
+});
+async function marcarTarea(id) {
+  try { await updateDoc(doc(db, RAIZ + '/tareas', id), {estado: 'hecha'}); avisar('Listo'); }
+  catch (e) { console.error('tarea hecha', e); avisar('No se pudo actualizar'); }
+}
+
+// ── Escuchar en vivo ───────────────────────────────────────────
+// Son tres personas trabajando a la vez: sin esto, una captura un cobro y las otras dos
+// siguen viendo el saldo viejo.
+function escuchar() {
+  desuscribir.forEach(u => { try { u(); } catch(e){} });
+  desuscribir = [];
+  const cols = [
+    ['pedidos','pedidos'], ['cobros','cobros'], ['materiales','materiales'],
+    ['invMovs','invMovs'], ['gastos','gastos'], ['tareas','tareas'], ['miembros','miembros']
+  ];
+  cols.forEach(([campo, ruta]) => {
+    const u = onSnapshot(collection(db, RAIZ + '/' + ruta), snap => {
+      estado[campo] = snap.docs.map(d => ({id:d.id, ...d.data()}));
+      estado.cargado[campo] = true;
+      punto('ok'); pintarTodo();
+    }, e => { console.error('escuchar ' + ruta, e); punto('mal'); });
+    desuscribir.push(u);
+  });
+}
+</script>
+</body>
+</html>

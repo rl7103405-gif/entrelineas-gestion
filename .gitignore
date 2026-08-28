@@ -1,0 +1,10 @@
+# Credenciales y notas internas. NUNCA deben llegar al repo: es público.
+CREDENCIALES.txt
+# lleva la contrasena del administrador para poder sembrar los miembros
+sembrar-miembros.mjs
+verificar-reglas.mjs
+NOTAS-INTERNAS.md
+
+# Basura del sistema
+Thumbs.db
+.DS_Store
