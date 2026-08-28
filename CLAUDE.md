@@ -5,7 +5,7 @@ personas: **Gaby Linares** (dueña), su tía **Marcela** ("Marse") y **Elita**. 
 app personal de finanzas: es la operación de un micronegocio real, con clientes, dinero
 de terceros e inventario.
 
-**No confundir con `Desktop\entrelineas`**, que es la *página pública* de pedidos. Esta
+**No confundir con `Desktop\ENTRELINEAS\pagina-web`**, que es la *página pública* de pedidos. Esta
 app es lo que Gaby pidió **primero**; la página se hizo antes a propósito, para tener algo
 que enseñar. Las dos se conectan por el bloque `[EL:v1]` que la página deja al final del
 mensaje de WhatsApp.

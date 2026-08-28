@@ -9,7 +9,7 @@
 
 import fs from 'fs';
 
-const APP = process.env.APP || 'C:/Users/elita/Desktop/entrelineas-gestion/index.html';
+const APP = process.env.APP || 'C:/Users/elita/Desktop/ENTRELINEAS/gestion/index.html';
 const HTML = fs.readFileSync(APP, 'utf8');
 
 // ── se extrae el bloque de funciones puras del archivo real ────
