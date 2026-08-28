@@ -244,7 +244,7 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
 
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getFirestore, doc, getDoc, setDoc, collection, addDoc, onSnapshot,
+import { initializeFirestore, doc, getDoc, setDoc, collection, addDoc, onSnapshot,
          query, orderBy, runTransaction, serverTimestamp, updateDoc }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
@@ -273,7 +273,13 @@ const SIN_CONFIGURAR = Object.values(firebaseConfig).some(v => v === 'PENDIENTE'
 let db = null, auth = null;
 if (!SIN_CONFIGURAR) {
   const app = initializeApp(firebaseConfig, NEGOCIO);
-  db = getFirestore(app);
+  // Long polling FORZADO. Caso real (27-ago-2026): en el Chrome de Roberto la contraseña
+  // entraba bien, pero "cargando tu perfil..." se quedaba eterno — Firestore conversa
+  // por un canal de streaming que algunos antivirus con inspección HTTPS y algunas
+  // extensiones rompen SIN rechazarlo: la petición no falla, se queda colgada, y el SDK
+  // reintenta en silencio para siempre. El long polling son peticiones HTTP comunes,
+  // indistinguibles de cargar cualquier página; con tres usuarias el costo es cero.
+  db = initializeFirestore(app, { experimentalForceLongPolling: true });
   auth = getAuth(app);
 }
 
@@ -827,13 +833,23 @@ if (auth) onAuthStateChanged(auth, async u => {
   // aquí era una de las rutas por las que "no pasaba nada".
   let motivo = '';
   try {
-    const snap = await getDoc(doc(db, RAIZ + '/miembros', u.uid));
+    // getDoc NO tiene tiempo límite propio: si el canal está bloqueado, espera para
+    // siempre. Justo así se veía el cuelgue: la traza quieta en "cargando tu perfil...".
+    // A los 15 segundos se corta y se dice, en vez de dejar la pantalla muda.
+    const snap = await Promise.race([
+      getDoc(doc(db, RAIZ + '/miembros', u.uid)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('sin-respuesta')), 15000))
+    ]);
     estado.miembro = snap.exists() ? {id:u.uid, ...snap.data()} : null;
     if (!snap.exists()) motivo = 'tu cuenta existe pero nadie le ha dado acceso al negocio';
   } catch(e) {
     console.error('miembro', e);
     estado.miembro = null;
-    motivo = 'no se pudo leer tu perfil (' + (e.code || e.message || 'error') + ')';
+    motivo = e.message === 'sin-respuesta'
+      ? 'tu contraseña es correcta, pero la base de datos no contesta — algo en este ' +
+        'navegador o en el antivirus está bloqueando la conexión. Prueba en una ventana ' +
+        'de incógnito o desde el celular'
+      : 'no se pudo leer tu perfil (' + (e.code || e.message || 'error') + ')';
   }
 
   if (!estado.miembro || estado.miembro.activo === false) {
