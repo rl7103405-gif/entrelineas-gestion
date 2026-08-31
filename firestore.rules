@@ -151,7 +151,109 @@ service cloud.firestore {
         allow read: if esMiembro();
         allow write: if esDuena();
       }
+
+      // ══ LA PÁGINA PÚBLICA ═════════════════════════════════════
+      //
+      //  Lo único de todo el negocio que el mundo puede leer sin cuenta.
+      //  Dos documentos y una razón para cada uno:
+      //
+      //  · 'publico'  — lo que la página muestra. Se lee sin auth.
+      //  · 'borrador' — lo que Gaby está escribiendo. NO se lee sin auth:
+      //    una errata a medias no debe verse en internet.
+      //
+      //  El permiso es `get`, no `list`: nadie puede pedir "dame todos los
+      //  documentos de sitio" y toparse con el borrador de rebote.
+      //
+      //  Los textos viajan como UN string de JSON, no como un mapa. No es
+      //  capricho: las reglas de Firestore no saben recorrer los valores de
+      //  un mapa, pero sí saben medir un string. Así el tope de tamaño es
+      //  real y no un adorno.
+      //
+      //  Ojo con lo que estas reglas NO pueden hacer: quien tenga cuenta de
+      //  dueña o socia escribe el texto que quiera, y ese texto sale en una
+      //  página pública. La defensa contra un <script> ahí es que la página
+      //  arma NODOS del DOM y nunca asigna innerHTML — está en el módulo
+      //  "CONTENIDO EDITABLE" de pagina-web/index.html. Si alguien cambia eso
+      //  por innerHTML, esta regla deja de alcanzar.
+      function editaSitio() {
+        return esMiembro() && (miRol() == 'duena' || miRol() == 'socia');
+      }
+      function contenidoValido() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['textosJson','imagenesJson','galeriaJson','whatsapp',
+                                 'revision','actualizadoPor','actualizadoEn'])
+          && d.textosJson   is string && d.textosJson.size()   <= 40000
+          && d.imagenesJson is string && d.imagenesJson.size() <= 8000
+          && d.galeriaJson  is string && d.galeriaJson.size()  <= 12000
+          && d.whatsapp     is string && d.whatsapp.size()     <= 15
+          && d.revision is int && d.revision >= 0
+          && d.actualizadoPor == request.auth.uid   // no se firma a nombre de otra
+          && d.actualizadoEn == request.time;       // ni se antedata
+      }
+      match /sitio/{doc} {
+        allow get:   if doc == 'publico' || esMiembro();
+        allow list:  if esMiembro();
+        // La revisión tiene que AVANZAR en cada escritura. Es el freno contra dos
+        // personas editando a la vez: el editor lee la revisión del servidor dentro de
+        // una transacción y solo escribe revisión+1; si alguien más ya avanzó la
+        // revisión mientras tanto, la transacción del cliente reintenta con el dato
+        // fresco en vez de pisarlo. Esta regla es la frontera real — el cliente podría
+        // tener un bug, pero sin esto un `setDoc` directo por SDK siempre podría pisar
+        // sin que Firestore se queje.
+        allow create: if editaSitio() && doc in ['publico','borrador'] && contenidoValido();
+        allow update: if editaSitio() && doc in ['publico','borrador'] && contenidoValido()
+                      && request.resource.data.revision > resource.data.revision;
+      }
+
+      // Las fotos que sube Gaby, una por documento y en BYTES, no en base64
+      // (base64 pesa 33% más y aquí el ancho de banda gratis es finito).
+      //
+      // Los ids son fijos, foto-00 a foto-19: es la única forma de que las
+      // reglas puedan poner un techo al número de fotos, porque no saben
+      // contar documentos de una colección.
+      //
+      // `publicada` nace en false SIEMPRE (una foto recién subida o reemplazada
+      // no ha salido a internet todavía) y solo pasa a true por la tanda que
+      // hace publicar() en el editor, DESPUÉS de que el documento público ya se
+      // escribió con éxito. `subidoEn == request.time` no puede sobrevivir a esa
+      // segunda escritura (solo cambia `publicada`, no se reenvía la foto entera),
+      // así que esa tanda se valida aparte con `soloCambiaPublicada()`.
+      function fotoValida(id) {
+        let d = request.resource.data;
+        return id.matches('^foto-(0[0-9]|1[0-9])$')
+          && d.keys().hasOnly(['imagen','mime','w','h','subidoPor','subidoEn','publicada'])
+          && d.imagen is bytes && d.imagen.size() > 0 && d.imagen.size() <= 286720  // 280 KB
+          && d.mime in ['image/jpeg','image/webp']
+          && d.w is int && d.w > 0 && d.w <= 4000
+          && d.h is int && d.h > 0 && d.h <= 4000
+          && d.subidoPor == request.auth.uid
+          && d.subidoEn == request.time
+          && d.publicada == false;
+      }
+      function soloCambiaPublicada() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['publicada'])
+          && request.resource.data.publicada is bool;
+      }
+      match /sitioFotos/{id} {
+        // De una en una y por su id, y solo si ya está publicada o si quien pregunta
+        // es del negocio: el borrador no se ve desde fuera, y de paso nadie puede
+        // adivinar un id (foto-00..foto-19) para ver una foto que Gaby no ha publicado.
+        allow get:    if id.matches('^foto-(0[0-9]|1[0-9])$')
+                      && (resource.data.get('publicada', false) == true || esMiembro());
+        allow list:   if esMiembro();
+        allow create, update: if editaSitio() && (fotoValida(id) || soloCambiaPublicada());
+        allow delete: if editaSitio();
+      }
     }
+
+    // ── riesgos de sitio/sitioFotos que se aceptan a conciencia ──
+    // 1) Estas reglas no pueden comprobar que `bytes` sea de verdad una imagen (no hay
+    //    forma de leer el contenido del archivo desde una regla). La defensa contra un
+    //    XSS por ahí es que `mime` solo acepta jpeg/webp: un SVG o un HTML disfrazado no
+    //    entra, aunque los bytes en sí no se validen.
+    // 2) `editaSitio()` (dueña y socia) podría, escribiendo por SDK en vez de usar el
+    //    editor, subir fotos en ráfaga y agotar la cuota gratis del plan Spark. Se acepta
+    //    porque solo dos personas de confianza tienen ese permiso.
 
     // ── nada fuera de un negocio ───────────────────────────────
     // Firestore ya niega por defecto; esto queda explícito como recordatorio

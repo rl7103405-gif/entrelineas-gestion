@@ -72,3 +72,34 @@ Estas ya costaron caro en `mi-cartera` y en las apps de la fábrica. No re-descu
 
 🔴 **En construcción.** Junta con Gaby y Marcela el **miércoles 2 de septiembre de 2026,
 5 de la tarde**.
+
+## La pestaña "mi página" (31-ago-2026)
+
+Esta app también es el **editor de la página pública**. Gaby y Marcela cambian
+ahí los textos y las fotos del sitio y le dan a publicar; Elita (`apoyo`) no ve
+esa pestaña, y las reglas la bloquean aunque intentara escribir por SDK.
+
+Cómo está armado, para no re-discutirlo:
+
+- Los textos de fábrica viven en el HTML de `pagina-web/index.html`, marcados con
+  `data-ed`. Aquí solo se guarda **lo que alguien cambió**. Si Firestore falla, la
+  página se ve como está escrita: es imposible dejarla en blanco desde aquí.
+- `contenido-defecto.js` es **generado** — sale de `node extraer-defectos.mjs` en
+  `pagina-web/`. No se edita a mano. Después de cambiar un texto del HTML hay que
+  volver a correrlo o el botón de "restaurar" restaura algo que ya no existe.
+- Dos documentos: `sitio/borrador` (privado) y `sitio/publico` (lectura abierta a
+  internet). Publicar hace `setDoc` **sin merge**, para que una clave borrada del
+  borrador desaparezca de la página de verdad.
+- Los textos viajan como **un string de JSON**, no como un mapa. Las reglas de
+  Firestore no saben recorrer los valores de un mapa pero sí medir un string: así
+  el tope de tamaño es real.
+- Las fotos son documentos `sitioFotos/foto-00` … `foto-19`, con la imagen en
+  `bytes` (no base64: pesa 33% menos) y tope de 280 KB. Los ids son fijos porque
+  es la única forma de que las reglas pongan un techo al número de fotos.
+- No se usó Firebase Storage: desde febrero de 2026 exige plan Blaze y este
+  proyecto está en Spark.
+
+**La regla que no se puede romper:** la página pública arma **nodos del DOM**
+para pintar lo editado, nunca `innerHTML`. El texto lo escribe una persona de
+confianza, pero se muestra a todo internet, y las reglas de Firestore no pueden
+revisar lo que dice. Si alguien cambia eso por `innerHTML`, abre un XSS.

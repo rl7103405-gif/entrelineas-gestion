@@ -282,6 +282,20 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
       <div class="rejilla tres" id="res-cifras" style="margin-bottom:12px"></div>
       <div id="res-cuerpo"></div>
     </section>
+
+    <!-- SITIO — el editor de la página pública -->
+    <section class="pagina" id="pg-sitio">
+      <div class="titulo">
+        <div><h2>Mi página</h2>
+          <p class="sub">cambia los textos y las fotos de entrelineas en internet</p></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <a class="btn linea chico" id="btn-ver-pagina" href="#" target="_blank" rel="noopener">ver mi página</a>
+          <button class="btn" id="btn-publicar">publicar</button>
+        </div>
+      </div>
+      <div id="sitio-estado"></div>
+      <div id="sitio-cuerpo"></div>
+    </section>
   </main>
 
   <p class="pie" id="version-app">—</p>
@@ -320,11 +334,15 @@ window.addEventListener('unhandledrejection', function (e) {
 </script>
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { initializeFirestore, doc, getDoc, setDoc, collection, addDoc, onSnapshot,
-         query, orderBy, runTransaction, serverTimestamp, updateDoc }
+import { initializeFirestore, doc, getDoc, getDocs, setDoc, collection, addDoc, onSnapshot,
+         query, orderBy, runTransaction, writeBatch, serverTimestamp, updateDoc, deleteDoc, Bytes }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+// Los textos "de fábrica" de la página pública. Archivo GENERADO: sale de
+// pagina-web/index.html con `node extraer-defectos.mjs`. Nunca se edita a mano,
+// y por eso el editor siempre sabe cuál era el original aunque la página cambie.
+import { TEXTOS_DEFECTO, IMAGENES_DEFECTO, GALERIA_DEFECTO } from './contenido-defecto.js';
 
 // ═══════════════════════════════════════════════════════════════
 //  CONFIGURACIÓN — pendiente de sustituir
@@ -601,21 +619,31 @@ const PAGINAS = [
   {id:'cobros',     nombre:'cuentas'},
   {id:'inventario', nombre:'inventario'},
   {id:'equipo',     nombre:'pendientes'},
-  {id:'resumen',    nombre:'resumen'}
+  {id:'resumen',    nombre:'resumen'},
+  // La página pública la edita quien responde por la marca. Elita ('apoyo')
+  // captura pedidos, no cambia lo que el mundo lee del negocio.
+  {id:'sitio',      nombre:'mi página', soloEdita:true}
 ];
+const puedeEditarSitio = () => ['duena','socia'].includes(estado.miembro?.rol);
+const paginasVisibles  = () => PAGINAS.filter(p => !p.soloEdita || puedeEditarSitio());
 let paginaActual = 'inicio';
 function pintarNav() {
-  $('nav').innerHTML = PAGINAS.map(p =>
+  $('nav').innerHTML = paginasVisibles().map(p =>
     `<button data-pagina="${p.id}" aria-current="${p.id === paginaActual}">${esc(p.nombre)}</button>`
   ).join('');
   $('nav').querySelectorAll('button').forEach(b =>
     b.addEventListener('click', () => irA(b.dataset.pagina)));
 }
 function irA(id) {
+  // Una pestaña que no le toca a este rol no se abre ni escribiendo la ruta.
+  if (!paginasVisibles().some(p => p.id === id)) id = 'inicio';
   paginaActual = id;
   PAGINAS.forEach(p => $('pg-' + p.id).classList.toggle('activa', p.id === id));
   pintarNav();
   pintarTodo();
+  // La página pública se lee aparte y solo cuando hace falta: son documentos
+  // con fotos adentro y no tiene caso bajarlos al entrar a la app.
+  if (id === 'sitio') { pintarSitio(); cargarSitio().then(pintarSitio); }
 }
 
 // ── Pedidos ────────────────────────────────────────────────────
@@ -968,10 +996,833 @@ function pintarResumen() {
     </div>`;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  MI PÁGINA — el editor de la página pública
+// ═══════════════════════════════════════════════════════════════
+//  Gaby cambia aquí lo que el mundo lee en entrelineas, sin tocar código
+//  y sin pedírselo a nadie. Cómo está pensado:
+//
+//  · Los textos de FÁBRICA viven en el HTML de la página, no aquí. Este
+//    editor solo guarda las CLAVES QUE ALGUIEN CAMBIÓ. Si la página se
+//    queda sin internet o Firestore falla, se ve como está escrita: no
+//    hay forma de que un error aquí deje la página en blanco.
+//  · Se trabaja sobre un BORRADOR privado y se pasa a público con el
+//    botón "publicar". Nadie ve una errata a media edición.
+//  · Publicar REEMPLAZA el documento público completo, no lo mezcla: si
+//    una clave se quitó del borrador, tiene que desaparecer de la página.
+//  · Las fotos son documentos aparte, en bytes y no en base64 (33% menos
+//    peso), con un tope duro de 280 KB por foto. Se suben ANTES de
+//    publicar la referencia: si la subida falla, la página sigue
+//    apuntando a la foto vieja y no a un hueco.
+// ═══════════════════════════════════════════════════════════════
+
+const FOTO_TOPE   = 280 * 1024;   // el mismo número está en firestore.rules
+const FOTO_MAX    = 20;           // foto-00 … foto-19, y las reglas lo obligan
+// Con 20 fotos a tope, pie+alt tienen que caber en los 12,000 bytes de
+// galeriaJson (hallazgo Q). Son BYTES, no caracteres: 20 fotos × (120+200) da
+// 6,400 bytes de texto, y lo demás del JSON —ref, medidas, comillas— cabe en el
+// resto con holgura. En bytes el cálculo se sostiene aunque todo venga acentuado.
+const TOPES_GAL_CAMPO = { pie: 120, alt: 200 };
+const idFoto      = n => 'foto-' + String(n).padStart(2, '0');
+const esIdFoto    = r => typeof r === 'string' && /^foto-(0\d|1\d)$/.test(r);
+const esRutaSitio = r => typeof r === 'string' && /^assets\/[\w./-]+$/.test(r) && !r.includes('..');
+
+const sitio = {
+  cargado: false, cargando: false,
+  textos: {},          // SOLO lo editado; lo que no está aquí sale del HTML
+  imagenes: {},        // clave -> {ref, alt}
+  galeria: null,       // null = la galería de fábrica, sin tocar
+  whatsapp: '',
+  // La última revisión que SABEMOS que tiene cada documento en el servidor (no un
+  // contador local): guardarBorrador() y publicar() la releen dentro de una
+  // transacción antes de escribir, y si ya no coincide es porque alguien más guardó
+  // desde otra pestaña mientras tanto — se aborta en vez de pisarlo (hallazgo A).
+  revisionServidor: { borrador: 0, publico: 0 },
+  // Lo que hay AHORA MISMO en el documento público, para poder decir con verdad
+  // si queda algo sin publicar. Se compara el contenido, no un contador: dos
+  // personas editando desde teléfonos distintos desincronizan un contador, y el
+  // aviso terminaría diciendo "ya está publicado" cuando no lo está.
+  publicado: null,
+  urls: new Map(),     // id de foto -> object URL, para la vista previa
+  // Ids que YA se repartieron a una subida en curso, aunque comprimirFoto() y el
+  // setDoc tarden varios segundos en terminar. huecoLibre() se llama de forma
+  // SÍNCRONA y reserva aquí mismo, antes de que exista ninguna foto nueva en
+  // sitio.imagenes/galeria: así dos subidas casi simultáneas nunca reciben el
+  // mismo id (hallazgo B).
+  fotosReservadas: new Set(),
+  guardando: false,
+  // true desde que hay una tecla sin llegar a Firestore hasta que guardarBorrador()
+  // termina con éxito. beforeunload solo avisa si esto es true (hallazgo U): un
+  // aviso que salta siempre se vuelve ruido y se aprende a ignorar.
+  sinGuardar: false,
+  // Mensaje PERMANENTE (no un toast) para cuando publicar() sí escribió el
+  // documento público pero no logró marcar las fotos correspondientes como
+  // públicas (hallazgo S). Sobrevive a los repintados porque vive aquí, no en
+  // el DOM; se limpia solo cuando un publicar() posterior sí completa la tanda.
+  avisoPublicacion: null
+};
+
+// ── de dónde sale cada campo ──────────────────────────────────
+const textoDe   = c => (typeof sitio.textos[c] === 'string') ? sitio.textos[c] : (TEXTOS_DEFECTO[c] ?? '');
+const esEditado = c => typeof sitio.textos[c] === 'string';
+function imagenDe(c) {
+  const d = IMAGENES_DEFECTO[c] || {url:'', alt:''};
+  const e = sitio.imagenes[c];
+  return { ref: e?.ref ?? d.url, alt: (typeof e?.alt === 'string' ? e.alt : d.alt), editada: !!e };
+}
+const galeriaDe = () => sitio.galeria
+  ?? GALERIA_DEFECTO.map(g => ({ref:g.url, pie:g.pie, alt:g.alt, w:g.w, h:g.h}));
+
+// Lo que se manda a Firestore. Un solo lugar para que borrador y publicado
+// nunca puedan tener forma distinta.
+function paqueteSitio() {
+  return {
+    textosJson:   JSON.stringify(sitio.textos),
+    imagenesJson: JSON.stringify(sitio.imagenes),
+    galeriaJson:  sitio.galeria ? JSON.stringify(sitio.galeria) : '',
+    whatsapp:     sitio.whatsapp || ''
+  };
+}
+// Lo que Gaby cambió y todavía no sale en internet.
+function hayPendiente() {
+  const p = sitio.publicado;
+  if (!p) return true;                       // nunca se ha publicado nada
+  const a = paqueteSitio();
+  return a.textosJson   !== p.textosJson  || a.imagenesJson !== p.imagenesJson
+      || a.galeriaJson  !== p.galeriaJson  || a.whatsapp     !== p.whatsapp;
+}
+
+// ── carga ─────────────────────────────────────────────────────
+async function cargarSitio() {
+  if (sitio.cargado || sitio.cargando) return;
+  sitio.cargando = true;
+  try {
+    const [bor, pub] = await Promise.all([
+      getDoc(doc(db, RAIZ + '/sitio', 'borrador')),
+      getDoc(doc(db, RAIZ + '/sitio', 'publico'))
+    ]);
+    const d = bor.exists() ? bor.data() : (pub.exists() ? pub.data() : {});
+    sitio.textos   = leerJsonSitio(d.textosJson, {});
+    sitio.imagenes = leerJsonSitio(d.imagenesJson, {});
+    const g        = leerJsonSitio(d.galeriaJson, null);
+    sitio.galeria  = Array.isArray(g) && g.length ? g : null;
+    sitio.whatsapp = typeof d.whatsapp === 'string' ? d.whatsapp : '';
+    sitio.revisionServidor.borrador = bor.exists() && Number.isFinite(bor.data().revision)
+      ? bor.data().revision : 0;
+    sitio.revisionServidor.publico = pub.exists() && Number.isFinite(pub.data().revision)
+      ? pub.data().revision : 0;
+    if (pub.exists()) {
+      const p = pub.data();
+      sitio.publicado = {
+        textosJson:   typeof p.textosJson   === 'string' ? p.textosJson   : '{}',
+        imagenesJson: typeof p.imagenesJson === 'string' ? p.imagenesJson : '{}',
+        galeriaJson:  typeof p.galeriaJson  === 'string' ? p.galeriaJson  : '',
+        whatsapp:     typeof p.whatsapp     === 'string' ? p.whatsapp     : ''
+      };
+    } else {
+      sitio.publicado = null;
+    }
+    sitio.cargado = true;
+    await cargarFotosUsadas();
+  } catch (e) {
+    console.error('cargar sitio', e);
+    avisar('No pude leer tu página');
+  } finally {
+    sitio.cargando = false;
+  }
+}
+// Un JSON corrupto no debe dejar el editor inservible: se ignora y se sigue
+// con lo de fábrica, igual que hace la página pública.
+function leerJsonSitio(s, respaldo) {
+  if (typeof s !== 'string' || !s) return respaldo;
+  try { const v = JSON.parse(s); return v && typeof v === 'object' ? v : respaldo; }
+  catch (e) { console.warn('contenido ilegible', e); return respaldo; }
+}
+
+// Solo se bajan las fotos que de verdad se están usando: son documentos con
+// bytes adentro y traerlas todas costaría megas por cada vez que se entra.
+async function cargarFotosUsadas() {
+  const ids = new Set();
+  Object.values(sitio.imagenes).forEach(v => { if (esIdFoto(v?.ref)) ids.add(v.ref); });
+  galeriaDe().forEach(g => { if (esIdFoto(g?.ref)) ids.add(g.ref); });
+  await Promise.all([...ids].map(async id => {
+    if (sitio.urls.has(id)) return;
+    try {
+      const s = await getDoc(doc(db, RAIZ + '/sitioFotos', id));
+      if (!s.exists()) return;
+      const f = s.data();
+      const u8 = f.imagen?.toUint8Array?.();
+      if (!u8?.length) return;
+      sitio.urls.set(id, URL.createObjectURL(new Blob([u8], {type: f.mime || 'image/jpeg'})));
+    } catch (e) { console.warn('foto ' + id, e); }
+  }));
+}
+// Dónde está la página pública vista desde esta app, para poder enseñar las fotos
+// originales en la vista previa (y para el enlace "ver mi página"). Son DOS repos
+// distintos con nombres que NO coinciden: en el escritorio las carpetas son
+// hermanas y se llaman 'pagina-web' y 'gestion', pero publicado en GitHub Pages
+// el sitio vive en el repo 'entrelineas' y la app en 'entrelineas-gestion'. Usar
+// '../pagina-web/' en producción se ve perfecto en la compu de quien lo prueba y
+// sale roto para Gaby: el peor tipo de bug porque nadie lo nota al probar en local.
+const RUTA_PAGINA = location.hostname.endsWith('github.io') ? '../entrelineas/' : '../pagina-web/';
+$('btn-ver-pagina').href = RUTA_PAGINA;
+// Para pintar: una foto de Firestore ya cargada, o la ruta del propio sitio.
+// Si la foto todavía no baja, se deja vacío en vez de romper el <img>.
+const urlVista = ref => esIdFoto(ref) ? (sitio.urls.get(ref) || '')
+                : esRutaSitio(ref)    ? (RUTA_PAGINA + ref) : '';
+
+// ── comprimir antes de subir ──────────────────────────────────
+// Una foto de celular pesa 4 MB y aquí el techo son 280 KB. No basta con
+// una calidad fija: una foto muy detallada la rebasa igual. Se baja calidad
+// y tamaño por pasos hasta que entra, y si no entra, se avisa en vez de
+// mandar algo que las reglas van a rechazar.
+async function comprimirFoto(archivo) {
+  if (!archivo || !/^image\//.test(archivo.type)) throw new Error('Eso no es una imagen');
+  if (archivo.size > 25 * 1024 * 1024)            throw new Error('La imagen pesa más de 25 MB');
+  const bitmap = await createImageBitmap(archivo).catch(() => { throw new Error('No pude abrir la imagen'); });
+  try {
+    for (const ancho of [1400, 1100, 900, 700]) {
+      const escala = Math.min(1, ancho / bitmap.width);
+      const w = Math.max(1, Math.round(bitmap.width  * escala));
+      const h = Math.max(1, Math.round(bitmap.height * escala));
+      const lienzo = document.createElement('canvas');
+      lienzo.width = w; lienzo.height = h;
+      lienzo.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+      for (const calidad of [0.82, 0.7, 0.58, 0.45]) {
+        const blob = await new Promise(r => lienzo.toBlob(r, 'image/jpeg', calidad));
+        if (!blob) continue;
+        if (blob.size <= FOTO_TOPE) {
+          return { bytes: new Uint8Array(await blob.arrayBuffer()), mime:'image/jpeg', w, h };
+        }
+      }
+    }
+  } finally { bitmap.close?.(); }
+  throw new Error('No pude dejarla abajo de 280 KB. Prueba con otra foto.');
+}
+
+// Los ids de foto que están AHORA MISMO en el documento publicado (lo que la gente
+// ve en internet). Se lee de sitio.publicado, que ya viene como JSON: nunca del
+// borrador, porque el borrador es justo lo que todavía no es público.
+function idsDeContenido(paquete) {
+  const ids = new Set();
+  if (!paquete) return ids;
+  const img = leerJsonSitio(paquete.imagenesJson, {});
+  Object.values(img).forEach(v => { if (esIdFoto(v?.ref)) ids.add(v.ref); });
+  const gal = leerJsonSitio(paquete.galeriaJson, null);
+  if (Array.isArray(gal)) gal.forEach(g => { if (esIdFoto(g?.ref)) ids.add(g.ref); });
+  return ids;
+}
+const idsPublicados = () => idsDeContenido(sitio.publicado);
+
+// Reusa el hueco que ya estaba ocupado (así reemplazar no gasta ids) y si no, toma
+// el primero libre. Con 20 llenos, avisa: el tope también está en reglas.
+//
+// Dos reglas que no son obvias con solo mirar el nombre:
+// · Se llama de forma SÍNCRONA y reserva el id ANTES de que exista la foto nueva
+//   en ningún lado (sitio.fotosReservadas): comprimirFoto() y el setDoc tardan
+//   segundos, y sin la reserva dos subidas casi simultáneas podían recibir el
+//   mismo id y pisarse (hallazgo B).
+// · Nunca reutiliza un id que esté en sitio.publicado: ese id es lo que la gente
+//   ve AHORA MISMO en internet, y sobrescribirlo cambiaría la página en vivo antes
+//   de que nadie le diera publicar (hallazgo C). En ese caso se toma un hueco
+//   libre distinto, aunque "reusar" venga lleno.
+// Todos los ids que cuentan como "ocupados" ahora mismo: los del borrador, los
+// reservados por una subida en curso y los del documento público. Es la MISMA
+// cuenta que usa huecoLibre() para decidir si ya no caben más fotos — antes
+// tarjetaGaleria() contaba distinto (solo borrador) y podía decir "5 de 20
+// usados" mientras huecoLibre() ya topaba en 20 por los publicados (hallazgo R).
+function fotosOcupadas() {
+  const usados = new Set(sitio.fotosReservadas);
+  Object.values(sitio.imagenes).forEach(v => { if (esIdFoto(v?.ref)) usados.add(v.ref); });
+  galeriaDe().forEach(g => { if (esIdFoto(g?.ref)) usados.add(g.ref); });
+  idsPublicados().forEach(id => usados.add(id));
+  return usados;
+}
+
+function huecoLibre(reusar) {
+  const publicados = idsPublicados();
+  const usados = fotosOcupadas();
+  if (esIdFoto(reusar) && !sitio.fotosReservadas.has(reusar) && !publicados.has(reusar)) {
+    sitio.fotosReservadas.add(reusar);
+    return reusar;
+  }
+  for (let i = 0; i < FOTO_MAX; i++) {
+    const id = idFoto(i);
+    if (!usados.has(id)) { sitio.fotosReservadas.add(id); return id; }
+  }
+  return null;
+}
+
+async function subirFoto(archivo, reusar) {
+  const id = huecoLibre(reusar);
+  if (!id) throw new Error('Ya hay ' + FOTO_MAX + ' fotos. Quita una antes de subir otra.');
+  try {
+    const f = await comprimirFoto(archivo);
+    // publicada:false siempre al escribir: una foto recién subida o reemplazada
+    // no ha salido a internet todavía, la marca publicar() (hallazgo D).
+    await setDoc(doc(db, RAIZ + '/sitioFotos', id), {
+      imagen: Bytes.fromUint8Array(f.bytes), mime: f.mime, w: f.w, h: f.h,
+      subidoPor: estado.usuario.uid, subidoEn: serverTimestamp(), publicada: false
+    });
+    const anterior = sitio.urls.get(id);
+    if (anterior) URL.revokeObjectURL(anterior);
+    sitio.urls.set(id, URL.createObjectURL(new Blob([f.bytes], {type: f.mime})));
+    return { id, w: f.w, h: f.h };
+  } finally {
+    // se libera aquí y no antes: mientras la subida siga en curso, el id sigue
+    // ocupado para cualquier otra subida que arranque al mismo tiempo
+    sitio.fotosReservadas.delete(id);
+  }
+}
+
+// Libera el object URL de cualquier foto que dejó de usarse en el editor —al
+// quitarla de la galería, al restaurar una imagen de fábrica o al restaurar la
+// galería completa (hallazgo L). Revisa el uso real antes de soltarla: un mismo
+// id puede seguir referenciado en otro campo.
+function liberarFotosSinUsar() {
+  const enUso = new Set();
+  Object.values(sitio.imagenes).forEach(v => { if (esIdFoto(v?.ref)) enUso.add(v.ref); });
+  galeriaDe().forEach(g => { if (esIdFoto(g?.ref)) enUso.add(g.ref); });
+  sitio.urls.forEach((url, id) => {
+    if (!enUso.has(id)) { URL.revokeObjectURL(url); sitio.urls.delete(id); }
+  });
+}
+
+// ── guardar y publicar ────────────────────────────────────────
+// El borrador se guarda solo, con un respiro para no escribir en cada tecla.
+let guardarLuego = null;
+// Los mismos topes que exige firestore.rules para cada JSON. Si Gaby los rebasa,
+// el único síntoma sin esto era "no pude guardar el borrador" sin decir cuál de
+// los tres campos era el culpable (hallazgo Q).
+const TOPES_JSON = {
+  textosJson:   { bytes: 40000, nombre: 'los textos' },
+  imagenesJson: { bytes: 8000,  nombre: 'los títulos y descripciones de las fotos fijas' },
+  galeriaJson:  { bytes: 12000, nombre: 'los pies y descripciones de la galería' }
+};
+// La regla mide con `.size()`, que son BYTES en UTF-8, no caracteres de JavaScript.
+// Con acentos, ñ, ¿ y ¡ —inevitables aquí— cada uno de esos pesa 2 bytes: medir con
+// .length subestimaba siempre y la app decía "sobra margen" con el guardado ya
+// roto (hallazgo P).
+const tamañoBytes = s => new TextEncoder().encode(s || '').length;
+// Cortar por caracteres es el mismo error de P disfrazado: "120 caracteres" son
+// 120 bytes en inglés y hasta 240 en español acentuado. Se corta por BYTES, y se
+// respeta el límite de carácter completo para no partir una ñ a la mitad y dejar
+// basura en pantalla.
+function cortarBytes(texto, tope) {
+  const s = String(texto ?? '');
+  if (tamañoBytes(s) <= tope) return s;
+  let corte = s.length;
+  while (corte > 0 && tamañoBytes(s.slice(0, corte)) > tope) corte--;
+  return s.slice(0, corte);
+}
+function marcarCambio() {
+  // Desde aquí hay algo sin llegar a Firestore. Se apaga solo cuando
+  // guardarBorrador() de verdad termina bien (hallazgo U).
+  sitio.sinGuardar = true;
+  pintarSitioEstado();
+  const paquete = paqueteSitio();
+  const medidas = Object.entries(TOPES_JSON).map(([campo, t]) =>
+    ({...t, campo, usados: tamañoBytes(paquete[campo])}));
+  const pasados = medidas.filter(m => m.usados > m.bytes);
+  const cercanos = medidas.filter(m => m.usados <= m.bytes && m.usados > m.bytes * 0.9);
+  if (pasados.length) {
+    avisar('Te pasaste del tamaño que aceptan ' + pasados.map(m => m.nombre).join(' y ') +
+      '. No se va a poder guardar hasta que recortes algo.');
+  } else if (cercanos.length) {
+    const m = cercanos[0];
+    avisar('Vas usando ' + m.usados + ' de ' + m.bytes + ' bytes en ' + m.nombre + '. Te quedan ' +
+      (m.bytes - m.usados) + '.');
+  }
+  clearTimeout(guardarLuego);
+  if (pasados.length) return;   // ya sabemos que las reglas lo van a rechazar: no lo intentamos
+  guardarLuego = setTimeout(guardarBorrador, 900);
+}
+// Guarda con una TRANSACCIÓN, no con un setDoc a ciegas: si Gaby y Marcela tienen
+// la pestaña abierta a la vez, la segunda en guardar ya no puede pisar en silencio
+// el trabajo de la primera (hallazgo A). Se relee la revisión del servidor DENTRO
+// de la transacción; si ya no es la que vimos la última vez, alguien más guardó
+// mientras tanto y se aborta — nunca se sobrescribe a ciegas.
+async function guardarBorrador() {
+  if (!puedeEditarSitio()) return;
+  sitio.guardando = true; pintarSitioEstado();
+  const ref = doc(db, RAIZ + '/sitio', 'borrador');
+  try {
+    const paquete = paqueteSitio();
+    const nueva = await runTransaction(db, async tx => {
+      const snap = await tx.get(ref);
+      const actual = snap.exists() && Number.isFinite(snap.data().revision) ? snap.data().revision : 0;
+      if (snap.exists() && actual !== sitio.revisionServidor.borrador) throw new Error('choque-revision');
+      const rev = actual + 1;
+      tx.set(ref, { ...paquete, revision: rev,
+        actualizadoPor: estado.usuario.uid, actualizadoEn: serverTimestamp() });
+      return rev;
+    });
+    sitio.revisionServidor.borrador = nueva;
+    sitio.sinGuardar = false;   // ya llegó a Firestore: beforeunload puede callarse (hallazgo U)
+  } catch (e) {
+    console.error('guardar borrador', e);
+    avisar(e.message === 'choque-revision'
+      ? 'Alguien cambió la página desde otro lado. Recarga antes de seguir para no borrar su trabajo.'
+      : 'No pude guardar el borrador');
+    // se propaga: publicar() no debe seguir adelante si el borrador no se guardó
+    // de verdad (hallazgo E)
+    throw e;
+  } finally { sitio.guardando = false; pintarSitioEstado(); }
+}
+
+async function publicar() {
+  if (!puedeEditarSitio()) return;
+  const btn = $('btn-publicar'); btn.disabled = true;
+  try {
+    clearTimeout(guardarLuego);
+    // El choque de revisión de ESTE guardarBorrador() es sobre el BORRADOR, no
+    // sobre la publicación: guardarBorrador() ya avisó el mensaje correcto (y
+    // distinto) al respecto, así que aquí solo se corta sin publicar nada, sin
+    // volver a avisar con un mensaje que hablaría de "publicar" sin ser cierto
+    // (hallazgo T).
+    try {
+      await guardarBorrador();
+    } catch (e) {
+      return;
+    }
+    // Se congela lo que se va a publicar ANTES de mandarlo: si Gaby sigue
+    // escribiendo mientras sube, lo que quede marcado como publicado tiene que
+    // ser exactamente lo que viajó, no lo que hay en pantalla al terminar.
+    const enviado = paqueteSitio();
+    const refPub = doc(db, RAIZ + '/sitio', 'publico');
+    let nueva;
+    try {
+      nueva = await runTransaction(db, async tx => {
+        const snap = await tx.get(refPub);
+        const actual = snap.exists() && Number.isFinite(snap.data().revision) ? snap.data().revision : 0;
+        if (snap.exists() && actual !== sitio.revisionServidor.publico) throw new Error('choque-revision');
+        const rev = actual + 1;
+        tx.set(refPub, { ...enviado, revision: rev,
+          actualizadoPor: estado.usuario.uid, actualizadoEn: serverTimestamp() });
+        return rev;
+      });                                          // sin merge: reemplaza completo
+    } catch (e) {
+      console.error('publicar', e);
+      // Este choque sí es sobre lo PUBLICADO: alguien más le dio publicar
+      // mientras tanto (hallazgo T — aquí el mensaje sí es correcto).
+      avisar(e.message === 'choque-revision'
+        ? 'Alguien más publicó la página desde otro lado. Recarga antes de seguir para no borrar su cambio.'
+        : 'No se pudo publicar: ' + (e.code || e.message));
+      return;
+    }
+    sitio.revisionServidor.publico = nueva;
+    avisar('Publicado. Tu página ya cambió.');
+    // Después, y solo después, de que lo público ya se escribió: se marca qué
+    // fotos son visibles ahora y cuáles dejaron de estarlo (hallazgo D).
+    try {
+      await marcarFotosPublicadas(enviado);
+      // sitio.publicado SOLO se confirma si la tanda de fotos también salió bien
+      // (hallazgo S): si se marcara antes y el batch fallara, hayPendiente()
+      // diría "todo publicado" mientras una foto sigue dando permission-denied
+      // al visitante anónimo.
+      sitio.publicado = enviado;
+      sitio.avisoPublicacion = null;
+    } catch (e) {
+      console.error('marcar fotos publicadas', e);
+      // Aviso PERMANENTE en sitio-estado, no un toast de un segundo: el
+      // documento público YA cambió, pero puede haber una foto que sigue en
+      // publicada:false y no se vería. Sobrevive a los repintados porque vive
+      // en el objeto sitio, no en el DOM (hallazgo S).
+      sitio.avisoPublicacion = 'Se publicó la página, pero alguna foto podría no estar ' +
+        'visible todavía. Dale publicar de nuevo para corregirlo.';
+    }
+  } finally { btn.disabled = false; pintarSitioEstado(); }
+}
+
+// Una sola tanda para marcar qué fotos son públicas ahora. Se lee TODA la
+// colección (máximo 20 documentos, tope de las propias reglas) porque el editor
+// solo tiene bajadas las fotos que está usando, no todas las que puedan existir
+// de subidas anteriores.
+async function marcarFotosPublicadas(paqueteEnviado) {
+  const publicasAhora = idsDeContenido(paqueteEnviado);
+  const listado = await getDocs(collection(db, RAIZ + '/sitioFotos'));
+  const batch = writeBatch(db);
+  let huboCambios = false;
+  listado.forEach(d => {
+    const debeSerPublica = publicasAhora.has(d.id);
+    if (!!d.data().publicada !== debeSerPublica) {
+      batch.update(d.ref, { publicada: debeSerPublica });
+      huboCambios = true;
+    }
+  });
+  if (huboCambios) await batch.commit();
+}
+
+// ── pantalla ──────────────────────────────────────────────────
+const GRUPOS = [
+  {titulo:'Portada',              prefijos:['hero']},
+  {titulo:'Qué hacemos',          prefijos:['piezas','pieza1','pieza2','pieza3','pieza4','pieza5','pieza6']},
+  {titulo:'Cómo se hace',         prefijos:['proceso','paso1','paso2','paso3','paso4']},
+  {titulo:'Ocasiones',            prefijos:['ocasiones']},
+  {titulo:'Galería',              prefijos:['galeria']},
+  {titulo:'Formulario de pedido', prefijos:['pedido']},
+  {titulo:'Preguntas frecuentes', prefijos:['faq','faq1','faq2','faq3','faq4','faq5','faq6']},
+  {titulo:'Pie de página',        prefijos:['pie']}
+];
+// El nombre corto de cada campo. Lo que ve Gaby no puede ser "pieza3.texto".
+const NOMBRES = {
+  kicker:'letrita de arriba', titulo:'título', texto:'texto', intro:'texto de entrada',
+  p:'pregunta', r:'respuesta', btn1:'botón principal', btn2:'botón secundario',
+  punto1:'punto 1', punto2:'punto 2', punto3:'punto 3',
+  pie1:'pie de la foto grande', pie2:'pie de la foto chica',
+  dato1t:'dato 1 · título', dato1d:'dato 1 · detalle',
+  dato2t:'dato 2 · título', dato2d:'dato 2 · detalle',
+  dato3t:'dato 3 · título', dato3d:'dato 3 · detalle'
+};
+const NOMBRES_IMG = {
+  'hero.foto1':'Portada · foto grande', 'hero.foto2':'Portada · foto chica',
+  'pieza1.foto':'Cuadros con figuras LEGO', 'pieza2.foto':'Arte en piedras',
+  'pieza3.foto':'Cajas de regalo', 'pieza4.foto':'Regalo empresarial',
+  'pieza5.foto':'Afición y equipos'
+};
+// El sub-bloque se llama como su propio título: si Gaby renombra la pieza 3,
+// el editor la nombra igual sin que nadie toque una tabla de textos.
+const nombreBloque = pre => textoDe(pre + '.titulo') || textoDe(pre + '.kicker') || pre;
+const nombreCampo  = suf => NOMBRES[suf] || suf;
+
+function pintarSitioEstado() {
+  const el = $('sitio-estado'); if (!el) return;
+  if (!sitio.cargado) { el.innerHTML = ''; return; }
+  // Aviso permanente por encima de todo lo demás (hallazgo S): la página se
+  // publicó pero alguna foto podría no verse. No se apaga solo — se queda hasta
+  // que un publicar() posterior sí marca las fotos con éxito.
+  if (sitio.avisoPublicacion) {
+    el.innerHTML = `<div class="aviso mal">${esc(sitio.avisoPublicacion)}</div>`;
+    return;
+  }
+  const nunca = !sitio.publicado;
+  const pendiente = hayPendiente();
+  el.innerHTML = sitio.guardando
+    ? `<div class="aviso falta">Guardando el borrador…</div>`
+    : nunca
+      ? `<div class="aviso falta">Tu página todavía muestra los textos originales.
+         Cambia lo que quieras y dale <b>publicar</b> cuando esté lista.</div>`
+      : pendiente
+        ? `<div class="aviso falta">Tienes cambios guardados que <b>la gente todavía no ve</b>.
+           Dale <b>publicar</b> para que salgan.</div>`
+        : `<div class="aviso bien">Todo lo que cambiaste ya está publicado.</div>`;
+}
+
+function pintarSitio() {
+  const cont = $('sitio-cuerpo'); if (!cont) return;
+  if (!puedeEditarSitio()) {
+    cont.innerHTML = `<p class="vacio">Solo Gaby y Marcela pueden cambiar la página.</p>`;
+    return;
+  }
+  if (!sitio.cargado) { cont.innerHTML = `<p class="vacio">Cargando tu página…</p>`; return; }
+
+  const abiertos = new Set(
+    Array.from(cont.querySelectorAll('details[open]')).map(d => d.dataset.grupo)
+  );
+
+  const bloques = GRUPOS.map(g => {
+    const cuerpo = g.prefijos.map(pre => {
+      const claves = Object.keys(TEXTOS_DEFECTO).filter(c => c.startsWith(pre + '.'));
+      if (!claves.length) return '';
+      const encabezado = g.prefijos.length > 1
+        ? `<p class="nota" style="margin:14px 0 6px;font-weight:600;color:var(--tinta)">${esc(nombreBloque(pre))}</p>` : '';
+      return encabezado + claves.map(c => {
+        const suf = c.slice(pre.length + 1);
+        return `<div class="campo">
+          <label for="ed-${esc(c)}">${esc(nombreCampo(suf))}
+            <button class="btn linea chico" data-restaurar="${esc(c)}" ${esEditado(c) ? '' : 'hidden'}
+              style="float:right;padding:2px 10px;font-size:12px">restaurar</button></label>
+          <textarea id="ed-${esc(c)}" data-clave="${esc(c)}" rows="${textoDe(c).length > 90 ? 3 : 1}"
+            >${esc(textoDe(c))}</textarea>
+        </div>`;
+      }).join('');
+    }).join('');
+    const imgs = Object.keys(NOMBRES_IMG)
+      .filter(k => g.prefijos.some(p => k.startsWith(p + '.')))
+      .map(tarjetaImagen).join('');
+    const extra = g.titulo === 'Galería' ? tarjetaGaleria()
+                : g.titulo === 'Pie de página' ? tarjetaContacto() : '';
+    const dentro = cuerpo + imgs + extra;
+    if (!dentro) return '';
+    return `<details class="tarjeta" data-grupo="${esc(g.titulo)}" ${abiertos.has(g.titulo) ? 'open' : ''}>
+      <summary style="cursor:pointer;font-weight:600;font-size:17px">${esc(g.titulo)}</summary>
+      <div style="margin-top:12px">${dentro}</div>
+    </details>`;
+  }).join('');
+
+  cont.innerHTML = bloques + `
+    <p class="nota" style="margin-top:16px">
+      Para poner una palabra en <b>negritas</b> ponla entre *asteriscos*, como en WhatsApp.
+      Si dejas un campo vacío, ese texto desaparece de la página.
+      El título de la pestaña del navegador y lo que sale al compartir el enlace
+      en Facebook o WhatsApp <b>no</b> se cambian desde aquí: eso se toca en el código.
+    </p>`;
+
+  cont.querySelectorAll('textarea[data-clave]').forEach(t => {
+    t.addEventListener('input', () => {
+      const c = t.dataset.clave, v = t.value;
+      if (v === (TEXTOS_DEFECTO[c] ?? '')) delete sitio.textos[c];
+      else sitio.textos[c] = v.slice(0, 3000);
+      // El botón de restaurar se enciende y se apaga solo. Se toca ESTE nodo y
+      // no se repinta la pantalla: repintar mientras alguien escribe le arranca
+      // el cursor, y peor, se come el clic que iba al campo de al lado.
+      const boton = cont.querySelector(`[data-restaurar="${CSS.escape(c)}"]`);
+      if (boton) boton.hidden = !esEditado(c);
+      marcarCambio();
+    });
+  });
+  cont.querySelectorAll('[data-restaurar]').forEach(b => b.addEventListener('click', e => {
+    e.preventDefault();
+    delete sitio.textos[b.dataset.restaurar];
+    marcarCambio(); pintarSitio();
+  }));
+  cont.querySelectorAll('[data-foto-de]').forEach(inp => inp.addEventListener('change', async () => {
+    const archivo = inp.files?.[0]; if (!archivo) return;
+    const destino = inp.dataset.fotoDe, indice = inp.dataset.indice;
+    // Se guarda ANTES de deshabilitar el input, porque deshabilitarlo puede moverle
+    // el foco al navegador y ya no sabríamos si Gaby estaba escribiendo en otro campo.
+    const escribiaAntes = document.activeElement
+      && ['TEXTAREA','INPUT'].includes(document.activeElement.tagName)
+      && document.activeElement !== inp && cont.contains(document.activeElement);
+    inp.disabled = true; avisar('Preparando la foto…');
+    try {
+      const actual = destino === 'galeria'
+        ? galeriaDe()[Number(indice)]?.ref
+        : destino === 'galeria-nueva' ? null : sitio.imagenes[destino]?.ref;
+      const { id, w, h } = await subirFoto(archivo, actual);
+      if (destino === 'galeria') {
+        const lista = galeriaDe().map(x => ({...x}));
+        lista[Number(indice)] = {...lista[Number(indice)], ref:id, w, h};
+        sitio.galeria = lista;
+      } else if (destino === 'galeria-nueva') {
+        // Agregar una foto NUEVA a la galería (hallazgo K): la principal carencia del
+        // editor era justo esta, reemplazar/reordenar no basta si Gaby nunca puede
+        // meter sus propias 12-20 fotos. Cambia la lista de renglones: siempre hace
+        // falta repintar completo, no hay "tarjeta" que actualizar a medias.
+        const lista = galeriaDe().map(x => ({...x}));
+        lista.push({ref:id, pie:'', alt:'', w, h});
+        sitio.galeria = lista;
+        marcarCambio(); pintarSitio();
+        avisar('Foto agregada. No olvides publicar.');
+        return;
+      } else {
+        const antes = imagenDe(destino);
+        sitio.imagenes[destino] = { ref:id, alt: antes.alt };
+      }
+      marcarCambio();
+      // Si alguien está escribiendo en otro campo, NO se repinta todo: eso le
+      // arrancaría el cursor y la posición justo a media escritura (hallazgo J).
+      // Se actualiza solo la tarjeta de esta foto, igual que ya se hace con el
+      // botón de restaurar de los textos.
+      if (escribiaAntes) actualizarTarjetaFoto(destino, indice, id);
+      else pintarSitio();
+      avisar('Foto lista. No olvides publicar.');
+    } catch (e) {
+      console.error('subir foto', e);
+      avisar(e.message || 'No pude subir la foto');
+    } finally { inp.disabled = false; inp.value = ''; }
+  }));
+  cont.querySelectorAll('[data-img-restaurar]').forEach(b => b.addEventListener('click', e => {
+    e.preventDefault();
+    delete sitio.imagenes[b.dataset.imgRestaurar];
+    liberarFotosSinUsar();
+    marcarCambio(); pintarSitio();
+  }));
+  cont.querySelectorAll('[data-alt-de]').forEach(t => t.addEventListener('input', () => {
+    const c = t.dataset.altDe, antes = imagenDe(c);
+    sitio.imagenes[c] = { ref: antes.ref, alt: t.value.slice(0, 300) };
+    marcarCambio();
+  }));
+  cont.querySelectorAll('[data-gal-campo]').forEach(t => t.addEventListener('input', () => {
+    const lista = galeriaDe().map(x => ({...x}));
+    const i = Number(t.dataset.indice);
+    if (!lista[i]) return;
+    // Topes más chicos que antes (hallazgo Q): con 20 fotos, pies y descripciones a
+    // 300 caracteres cada uno alcanzaban a rebasar los 12,000 bytes que exige
+    // galeriaJson en firestore.rules. Se cuentan en BYTES, no en caracteres: en
+    // español un tope de 200 caracteres puede pesar 400 bytes.
+    lista[i][t.dataset.galCampo] = cortarBytes(t.value, TOPES_GAL_CAMPO[t.dataset.galCampo] || 300);
+    sitio.galeria = lista; marcarCambio();
+  }));
+  cont.querySelectorAll('[data-gal-accion]').forEach(b => b.addEventListener('click', e => {
+    e.preventDefault();
+    const i = Number(b.dataset.indice), lista = galeriaDe().map(x => ({...x}));
+    const acc = b.dataset.galAccion;
+    if (acc === 'quita' && lista.length <= 1) { avisar('La galería no puede quedarse vacía'); return; }
+    if (acc === 'sube' && i > 0)                [lista[i-1], lista[i]] = [lista[i], lista[i-1]];
+    if (acc === 'baja' && i < lista.length - 1) [lista[i+1], lista[i]] = [lista[i], lista[i+1]];
+    if (acc === 'quita')                         lista.splice(i, 1);
+    sitio.galeria = lista;
+    if (acc === 'quita') liberarFotosSinUsar();
+    marcarCambio(); pintarSitio();
+  }));
+  const restGal = cont.querySelector('#gal-restaurar');
+  if (restGal) restGal.addEventListener('click', e => {
+    e.preventDefault(); sitio.galeria = null; liberarFotosSinUsar(); marcarCambio(); pintarSitio();
+  });
+  const wa = cont.querySelector('#ed-whatsapp');
+  if (wa) wa.addEventListener('input', () => {
+    let d = wa.value.replace(/\D/g, '').slice(0, 15);
+    // si escribe sus 10 dígitos a secas (lo más común), se le completa el 52 sola:
+    // ese olvido es justo el que deja los botones de WhatsApp rotos sin avisar
+    if (d.length === 10) d = '52' + d;
+    sitio.whatsapp = d;
+    wa.value = d;
+    const prev = cont.querySelector('#ed-whatsapp-prev');
+    if (prev) prev.innerHTML = textoPrevisualizacionWa(d);
+    marcarCambio();
+  });
+  pintarSitioEstado();
+}
+
+// Actualiza SOLO la miniatura y el botón de restaurar de una tarjeta de foto, sin
+// tocar el resto del formulario (hallazgo J): repintar todo mientras alguien
+// escribe en otro campo le arranca el cursor y se come el siguiente clic.
+function actualizarTarjetaFoto(destino, indice, id) {
+  const cont = $('sitio-cuerpo'); if (!cont) return;
+  const url = urlVista(id);
+  if (destino === 'galeria') {
+    const inp = cont.querySelector(`[data-foto-de="galeria"][data-indice="${indice}"]`);
+    const fila = inp?.closest('.campo');
+    if (!fila) return;
+    let img = fila.querySelector('img');
+    if (!img) {
+      img = document.createElement('img');
+      img.alt = '';
+      img.style.cssText = 'width:76px;height:76px;object-fit:cover;border-radius:8px';
+      fila.insertBefore(img, fila.firstChild);
+      fila.querySelector('div[style*="background:var(--hueso)"]')?.remove();
+    }
+    img.src = url;
+    return;
+  }
+  const inp = cont.querySelector(`[data-foto-de="${CSS.escape(destino)}"]`);
+  const campo = inp?.closest('.campo');
+  if (!campo) return;
+  const fila = campo.querySelector('div[style*="display:flex"]') || campo;
+  let img = campo.querySelector('img');
+  if (!img) {
+    img = document.createElement('img');
+    img.alt = '';
+    img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--arena)';
+    fila.insertBefore(img, fila.firstChild);
+  }
+  img.src = url;
+  const label = campo.querySelector('label');
+  let boton = label?.querySelector('[data-img-restaurar]');
+  if (label && !boton) {
+    boton = document.createElement('button');
+    boton.className = 'btn linea chico';
+    boton.dataset.imgRestaurar = destino;
+    boton.style.cssText = 'float:right;padding:2px 10px;font-size:12px';
+    boton.textContent = 'foto original';
+    boton.addEventListener('click', e => {
+      e.preventDefault();
+      delete sitio.imagenes[destino];
+      liberarFotosSinUsar();
+      marcarCambio(); pintarSitio();
+    });
+    label.appendChild(boton);
+  }
+  if (boton) boton.hidden = false;
+}
+
+function tarjetaImagen(clave) {
+  const im = imagenDe(clave);
+  const url = urlVista(im.ref);
+  return `<div class="campo" style="border-top:1px solid var(--arena);padding-top:12px">
+    <label>${esc(NOMBRES_IMG[clave])}
+      ${im.editada ? `<button class="btn linea chico" data-img-restaurar="${esc(clave)}"
+        style="float:right;padding:2px 10px;font-size:12px">foto original</button>` : ''}</label>
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      ${url ? `<img src="${esc(url)}" alt="" style="width:96px;height:96px;object-fit:cover;
+        border-radius:10px;border:1px solid var(--arena)">` : ''}
+      <div style="flex:1;min-width:0">
+        <input type="file" accept="image/*" data-foto-de="${esc(clave)}" style="font-size:13px">
+        <textarea data-alt-de="${esc(clave)}" rows="2" style="margin-top:8px"
+          placeholder="Describe la foto para quien no la ve">${esc(im.alt)}</textarea>
+      </div>
+    </div>
+  </div>`;
+}
+
+function tarjetaGaleria() {
+  const lista = galeriaDe();
+  // La misma cuenta que huecoLibre() (hallazgo R): incluye lo publicado y lo
+  // reservado por una subida en curso, no solo lo que hay en el borrador.
+  const usadas = fotosOcupadas();
+  return `<div style="border-top:1px solid var(--arena);padding-top:14px;margin-top:14px">
+    <div class="titulo" style="margin-bottom:8px">
+      <div><b>Las fotos de la galería</b>
+        <p class="nota">${lista.length} foto${lista.length===1?'':'s'} ·
+          ${usadas.size} de ${FOTO_MAX} espacios usados</p></div>
+      ${sitio.galeria ? `<button class="btn linea chico" id="gal-restaurar">galería original</button>` : ''}
+    </div>
+    ${lista.map((g, i) => {
+      const url = urlVista(g.ref);
+      return `<div class="campo" style="display:flex;gap:12px;align-items:flex-start;
+        border:1px solid var(--arena);border-radius:12px;padding:10px">
+        ${url ? `<img src="${esc(url)}" alt="" style="width:76px;height:76px;object-fit:cover;
+          border-radius:8px">` : `<div style="width:76px;height:76px;border-radius:8px;
+          background:var(--hueso)"></div>`}
+        <div style="flex:1;min-width:0">
+          <input type="text" data-gal-campo="pie" data-indice="${i}" value="${esc(g.pie || '')}"
+            placeholder="Pie: qué es esta pieza">
+          <textarea data-gal-campo="alt" data-indice="${i}" rows="2" style="margin-top:6px"
+            placeholder="Descripción para quien no ve la foto">${esc(g.alt || '')}</textarea>
+          <div class="chips" style="margin-top:8px">
+            <input type="file" accept="image/*" data-foto-de="galeria" data-indice="${i}"
+              style="font-size:12.5px;flex:1">
+            <button class="btn linea chico" data-gal-accion="sube"  data-indice="${i}"
+              aria-label="subir esta foto de lugar" ${i === 0 ? 'disabled' : ''}>↑</button>
+            <button class="btn linea chico" data-gal-accion="baja"  data-indice="${i}"
+              aria-label="bajar esta foto de lugar" ${i === lista.length-1 ? 'disabled' : ''}>↓</button>
+            <button class="btn linea chico" data-gal-accion="quita" data-indice="${i}">quitar</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+    <p class="nota" style="margin-top:8px">Para cambiar una foto, elige el archivo en su renglón.
+      Se achica sola antes de subirse: manda la foto tal cual sale del celular.</p>
+    ${usadas.size < FOTO_MAX
+      ? `<div class="campo" style="border:1px dashed var(--rosa-borde);border-radius:12px;
+          padding:14px;text-align:center;margin-top:10px">
+          <input type="file" accept="image/*" data-foto-de="galeria-nueva" style="font-size:13px">
+          <p class="nota" style="margin-top:6px">Agrega una foto nueva a la galería
+            (quedan ${FOTO_MAX - usadas.size} espacios)</p>
+        </div>`
+      : `<p class="nota" style="margin-top:8px">Ya llegaste al máximo de ${FOTO_MAX} fotos.
+          Quita alguna para poder agregar otra.</p>`}
+  </div>`;
+}
+
+// Formato que de verdad funciona en un enlace wa.me: 52 + 10 dígitos, nada más.
+// Con 10 sueltos (sin el 52) o con cualquier otra cosa entre 10 y 15 dígitos, los
+// tres botones de WhatsApp del sitio dejan de servir sin ningún error visible —
+// es la función comercial principal de la página (hallazgo H).
+const waValido = d => /^52\d{10}$/.test(d);
+function textoPrevisualizacionWa(d) {
+  if (!d) return 'Si lo dejas vacío se queda el que ya trae la página.';
+  if (waValido(d)) return 'Va a quedar así: <b>https://wa.me/' + esc(d) + '</b>';
+  return '<span style="color:var(--rojo)">Ese número no va a funcionar: tiene que ser ' +
+    'a 10 dígitos (le agregamos el 52 solo) o a 12 empezando con 52. Así como está, ' +
+    'los tres botones de WhatsApp de la página se quedarían rotos.</span>';
+}
+function tarjetaContacto() {
+  return `<div class="campo" style="border-top:1px solid var(--arena);padding-top:12px">
+    <label for="ed-whatsapp">Número de WhatsApp de la página</label>
+    <input type="text" id="ed-whatsapp" inputmode="numeric" value="${esc(sitio.whatsapp)}"
+      placeholder="522221082115 — 52 + lada + número">
+    <p class="nota" id="ed-whatsapp-prev">${textoPrevisualizacionWa(sitio.whatsapp)}</p>
+    <p class="nota">Cambia los tres botones de WhatsApp de un jalón.</p>
+  </div>`;
+}
+
 function pintarTodo() {
   if (!estado.usuario) return;
   pintarInicio(); pintarPedidos(); pintarCobros(); pintarInventario();
   pintarDinero(); pintarTareas(); pintarResumen();
+  if (paginaActual === 'sitio') pintarSitioEstado();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1096,7 +1947,34 @@ async function entrar() {
 $('btn-salir').addEventListener('click', async () => {
   desuscribir.forEach(u => { try { u(); } catch(e){} });
   desuscribir = [];
+  reiniciarSitio();
   await signOut(auth);
+});
+// Deja el editor de la página como si nadie hubiera entrado. Sin esto, si Marcela
+// entra después en la misma pestaña/dispositivo, heredaba el borrador a medio
+// escribir de Gaby, el temporizador de autoguardado seguía corriendo y las fotos
+// de vista previa quedaban vivas en memoria (hallazgo G).
+function reiniciarSitio() {
+  clearTimeout(guardarLuego);
+  sitio.urls.forEach(url => URL.revokeObjectURL(url));
+  sitio.urls.clear();
+  sitio.fotosReservadas.clear();
+  sitio.cargado = false; sitio.cargando = false;
+  sitio.textos = {}; sitio.imagenes = {}; sitio.galeria = null; sitio.whatsapp = '';
+  sitio.revisionServidor = { borrador: 0, publico: 0 };
+  sitio.publicado = null; sitio.guardando = false;
+  sitio.sinGuardar = false; sitio.avisoPublicacion = null;
+}
+
+// Si recarga o cierra la pestaña dentro de la ventana de 900 ms del autoguardado
+// —o mientras guardarBorrador() sigue en el aire—, esos últimos caracteres nunca
+// llegan a Firestore y nadie se entera (hallazgo U). Solo avisa cuando de verdad
+// hay algo sin guardar: un aviso que salta siempre se vuelve ruido y se aprende a
+// ignorar, por eso no es incondicional.
+window.addEventListener('beforeunload', e => {
+  if (!sitio.sinGuardar) return;
+  e.preventDefault();
+  e.returnValue = '';
 });
 
 if (auth) onAuthStateChanged(auth, async u => {
@@ -1140,6 +2018,10 @@ if (auth) onAuthStateChanged(auth, async u => {
   $('pantalla-acceso').hidden = true; $('app').hidden = false;
   $('quien-soy').textContent = (estado.miembro.nombre || u.email) +
     ' · ' + (ROLES[estado.miembro.rol] || estado.miembro.rol || '');
+  // pintarNav() se pintó al arrancar el script, ANTES de saber el rol (estado.miembro
+  // todavía no existía): sin repintar aquí, "mi página" solo aparecía después de que
+  // Gaby navegara a otra pestaña y volviera (hallazgo F).
+  pintarNav();
   escuchar();
 });
 
@@ -1303,6 +2185,8 @@ $('btn-pegar-pedido').addEventListener('click', () => {
 });
 
 // ── Controles del resumen ──────────────────────────────────────
+$('btn-publicar').addEventListener('click', publicar);
+
 $('res-semana').addEventListener('click', () => { resTipo = 'semana'; resOffset = 0; pintarResumen(); });
 $('res-mes').addEventListener('click', () => { resTipo = 'mes'; resOffset = 0; pintarResumen(); });
 $('res-atras').addEventListener('click', () => { resOffset--; pintarResumen(); });

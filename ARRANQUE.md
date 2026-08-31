@@ -11,7 +11,44 @@
 | Reglas de seguridad publicadas | ✅ desde `firestore.rules` |
 | Cuentas en Authentication (4) | ✅ Gaby, Marcela, Elita, Roberto |
 | Documentos de miembro | ⏳ ver abajo |
-| Repo y GitHub Pages | ⏳ pendiente |
+| Repo y GitHub Pages | ✅ publicado (ver abajo) |
+| Reglas del editor de la página (`sitio`, `sitioFotos`) | ✅ desplegadas el 31-ago-2026 |
+
+> ⚠️ **El deploy se corre desde `gestion/`, no desde la raíz.** `firebase.json`
+> vive en esa carpeta; desde `Desktop\ENTRELINEAS` el CLI contesta
+> *"Not in a Firebase app directory"*.
+>
+> ```bash
+> cd gestion
+> firebase deploy --only firestore:rules --project entrelineas-gestion
+> ```
+
+### Cómo se comprobó la frontera pública, en vivo
+
+Sin emulador (falta Java), la forma honesta de verificar las reglas es pegarle a
+la API REST de Firestore **sin autenticar**, usando la misma `apiKey` pública que
+lleva la página. Las lecturas no cambian nada y las escrituras rebotan, así que
+se puede correr contra producción sin riesgo. Resultado del 31-ago-2026:
+
+| Petición anónima | Respuesta | Qué significa |
+|---|---|---|
+| `sitio/publico` | 404 | **Permitida.** El documento todavía no existe |
+| `sitio/borrador` | 403 | El borrador no se ve desde fuera |
+| `pedidos/…` y `clientes/…` | 403 | Los datos del negocio siguen cerrados |
+| `sitioFotos/foto-00` | 403 | Una foto sin `publicada:true` no se entrega |
+| listar `sitioFotos` | 403 | No se pueden enumerar las fotos |
+| crear `sitio/prueba-anonima` | 403 | El anónimo no escribe |
+| modificar `sitioFotos/foto-05` | 403 | Tampoco pisa fotos |
+
+El detalle que importa: `sitio/publico` contesta **404 y no 403**. Son dos cosas
+distintas — 403 sería "no te dejo leer", 404 es "te dejo leer, pero no hay nada
+todavía". Ahí se ve que la única puerta pública quedó abierta y ninguna otra.
+
+Para repetirlo, cambiando la ruta al final:
+
+```bash
+curl -s "https://firestore.googleapis.com/v1/projects/entrelineas-gestion/databases/(default)/documents/negocios/entrelineas/sitio/publico?key=<apiKey>"
+```
 
 Casi todo se hizo con el CLI de Firebase, que ya estaba instalado y con la sesión de
 Roberto abierta. Los comandos quedan aquí por si hay que repetirlo en otro proyecto:
@@ -65,6 +102,16 @@ Gaby y Roberto son `duena`; Marcela, `socia`; Elita, `apoyo`.
 🔴 **Falta que Gaby confirme si Elita debe ver el dinero.** Hoy los tres leen todo. Si no
 debe, cobros y gastos tienen que vivir en otro lado: Firestore no puede esconder campos
 sueltos de un documento que ya dejó leer. **Decidirlo antes de que haya datos.**
+
+## Las dos direcciones
+
+Los repos **ya están publicados** y los dos son **públicos**. Ojo con esto: el
+nombre de la carpeta local no es el nombre del repo, y eso ya causó un error.
+
+| | Carpeta local | Repo | Dirección |
+|---|---|---|---|
+| Página pública | `pagina-web` | `entrelineas` | https://rl7103405-gif.github.io/entrelineas/ |
+| App de gestión | `gestion` | `entrelineas-gestion` | https://rl7103405-gif.github.io/entrelineas-gestion/ |
 
 ## Publicar la app
 
