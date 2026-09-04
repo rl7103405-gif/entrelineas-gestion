@@ -31,7 +31,11 @@ const api = new Function('estado', fuente + `
   return {aCent, dinero, esFechaValida, habilesEntre, restaHabiles, hoyISO,
           saldoDe, pagadoDe, fechaOperativa, urgencia, pedidosOrdenados,
           existencia, consumido, faltantes, semanaActual, enSemana, DIAS_PAQUETERIA,
-          parseBloqueEL, PIEZAS_EL, rangoPeriodo};
+          parseBloqueEL, PIEZAS_EL, rangoPeriodo,
+          // indicadores (4-sep-2026)
+          fechaCivilDe, fechaAltaDe, fmtCorto, compararPeriodos, totalesEn, deltaPct,
+          textoDelta, textoBalance, gastosParaPastel, rebanadas, arcosDonut,
+          movimientosDe, agruparPorDia, limitarPorDias, montoCobro, porCuentaDe};
 `);
 
 // ── utilidades de prueba ───────────────────────────────────────
@@ -80,6 +84,8 @@ console.log('\n2. Los centavos son enteros: nada de 0.1 + 0.2');
   chk('$0.10 + $0.20 da exactamente $0.30', t.aCent(0.1) + t.aCent(0.2) === t.aCent(0.3));
   chk('$1,234.56 se guarda como 123456', t.aCent(1234.56) === 123456);
   chk('y se muestra de vuelta igual', t.dinero(123456) === '$1,234.56', t.dinero(123456));
+  chk('un negativo lleva el signo ANTES del símbolo: "−$50.00", no "$-50.00"',
+      t.dinero(-5000) === '−$50.00', t.dinero(-5000));
 }
 
 // ═══════════ 3. PRIORIDAD — lo que hoy lleva en papel ═══════════
@@ -233,6 +239,222 @@ console.log('\n11. Los periodos del resumen');
   chk('el mes empieza en día 1', m.desde.getDate() === 1);
   const m2 = t.rangoPeriodo('mes', -2);
   chk('dos meses atrás trae nombre y año', /^[a-z]+ \d{4}$/.test(m2.titulo), m2.titulo);
+}
+
+// ═══════════ 12. FECHAS QUE JAVASCRIPT "ARREGLA" EN SILENCIO ═══════════
+console.log('\n12. Una fecha imposible se rechaza, no se corre al mes siguiente');
+{
+  const t = api(nuevoEstado());
+  chk('31 de febrero NO es válida', t.esFechaValida('2026-02-31') === false);
+  chk('31 de abril NO es válida', t.esFechaValida('2026-04-31') === false);
+  chk('28 de febrero sí', t.esFechaValida('2026-02-28') === true);
+  chk('29 de febrero bisiesto sí', t.esFechaValida('2024-02-29') === true);
+  chk('29 de febrero no bisiesto NO', t.esFechaValida('2026-02-29') === false);
+  chk('basura no es fecha', t.esFechaValida('hoy') === false && t.esFechaValida(null) === false);
+}
+
+// ═══════════ 13. COMPARAR CONTRA EL PERIODO ANTERIOR, PAREJO ═══════════
+console.log('\n13. La comparación recorta el anterior a los mismos días');
+{
+  const t = api(nuevoEstado());
+  const iso = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+
+  // sábado 5 de septiembre: van 5 días del mes
+  const c = t.compararPeriodos('mes', 0, new Date(2026, 8, 5, 15, 30));
+  chk('el actual va del 1 al 6 (mañana a medianoche, hoy incluido)',
+      iso(c.actual.desde) === '2026-09-01' && iso(c.actual.hasta) === '2026-09-06');
+  chk('el anterior son los primeros 5 días de agosto',
+      iso(c.anterior.desde) === '2026-08-01' && iso(c.anterior.hasta) === '2026-08-06');
+  chk('y la leyenda lo dice', c.leyenda === 'los primeros 5 días de agosto' && c.parcial === true);
+  chk('5 de septiembre: agosto tiene sobra de días, sí es parejo', c.parejo === true);
+
+  // 31 de marzo: febrero solo tuvo 28 → se compara contra febrero completo y se avisa
+  const f = t.compararPeriodos('mes', 0, new Date(2026, 2, 31, 9));
+  chk('día 31 contra febrero: el anterior es febrero entero',
+      iso(f.anterior.desde) === '2026-02-01' && iso(f.anterior.hasta) === '2026-03-01');
+  chk('y la leyenda dice "completo", no finge mismos días', f.leyenda === 'febrero completo');
+  chk('31 de marzo: NO son los mismos días, parejo es false', f.parejo === false);
+
+  // lunes 7 de septiembre: la semana lleva un solo día
+  const l = t.compararPeriodos('semana', 0, new Date(2026, 8, 7, 8));
+  chk('semana en lunes: un día contra el lunes pasado', l.n === 1 && l.nAnt === 1
+      && iso(l.anterior.desde) === '2026-08-31' && iso(l.anterior.hasta) === '2026-09-01');
+  chk('leyenda en singular', l.leyenda === 'el primer día de la semana pasada');
+
+  // jueves 10: cuatro días, la semana pasada cruzó de agosto a septiembre
+  const j = t.compararPeriodos('semana', 0, new Date(2026, 8, 10, 23, 59));
+  chk('semana que cruza de mes: lunes 31 de agosto a viernes 4', j.n === 4
+      && iso(j.anterior.desde) === '2026-08-31' && iso(j.anterior.hasta) === '2026-09-04');
+
+  // un periodo ya cerrado se compara completo contra completo
+  const p = t.compararPeriodos('mes', -1, new Date(2026, 8, 5));
+  chk('agosto completo contra julio completo', p.parcial === false
+      && iso(p.actual.desde) === '2026-08-01' && iso(p.actual.hasta) === '2026-09-01'
+      && iso(p.anterior.desde) === '2026-07-01' && iso(p.anterior.hasta) === '2026-08-01');
+  chk('con nombre y año', p.leyenda === 'julio 2026');
+
+  // a medianoche exacta, hoy sigue contando como un día
+  const m = t.compararPeriodos('mes', 0, new Date(2026, 8, 1, 0, 0, 0));
+  chk('día 1 a las 00:00 cuenta como 1 día', m.n === 1 && iso(m.actual.hasta) === '2026-09-02');
+}
+
+// ═══════════ 14. LOS TEXTOS DE LA COMPARACIÓN NO MIENTEN ═══════════
+console.log('\n14. Porcentajes solo cuando tienen base; el balance se dice con palabras');
+{
+  const t = api(nuevoEstado());
+  chk('20% más', t.deltaPct(120, 100) === 20 && t.textoDelta(20) === '▲ +20%');
+  chk('15% menos', t.textoDelta(-15) === '▼ −15%');
+  chk('sin base no hay porcentaje', t.deltaPct(500, 0) === null && t.textoDelta(null) === null);
+  chk('un cambio menor a medio punto es "igual"', t.textoDelta(0.3) === 'igual que antes');
+  chk('un actual no finito no produce "−NaN%"', t.deltaPct(NaN, 100) === null && t.deltaPct(undefined, 100) === null);
+  chk('nada contra nada es "igual que antes", no "+$0.00"', t.textoBalance(0, 0) === 'igual que antes');
+  chk('de pérdida a positivo se dice, no se calcula (daría −200%)',
+      t.textoBalance(10000, -10000) === 'pasaste de pérdida a saldo positivo');
+  chk('a pérdida también', t.textoBalance(-5000, 10000) === 'pasaste a pérdida');
+  chk('los dos positivos: porcentaje', t.textoBalance(20000, 10000) === '▲ +100%');
+  chk('los dos negativos: diferencia en pesos', t.textoBalance(-20000, -10000) === '−$100.00 contra el anterior');
+  chk('nada de NaN', !/NaN|Infinity/.test(String(t.textoBalance(0, 0))));
+
+  // totales: la venta nace cuando se captura, no cuando la clienta la quiere
+  const e = nuevoEstado();
+  const ts = d => ({toDate: () => d});
+  e.pedidos = [
+    {id:'a', totalCent: 100000, estado:'nuevo', creadoEn: ts(new Date(2026, 7, 15)), fechaSolicitada:'2026-12-01'},
+    {id:'b', totalCent: 50000,  estado:'nuevo', fechaSolicitada:'2026-08-20'},   // viejo, sin creadoEn
+    {id:'c', totalCent: 999999, estado:'cancelado', creadoEn: ts(new Date(2026, 7, 16))}
+  ];
+  e.cobros = [
+    {pedidoId:'a', tipo:'pago', montoCent: 30000, fecha:'2026-08-15'},
+    {pedidoId:'a', tipo:'reversion', montoCent: 30000, fecha:'2026-08-16'}
+  ];
+  const t2 = api(e);
+  const ago = t2.totalesEn(e, new Date(2026, 7, 1), new Date(2026, 8, 1));
+  chk('el pedido para diciembre se vendió en AGOSTO', ago.vendidos.some(p => p.id === 'a'));
+  chk('sin creadoEn cae a la fecha solicitada', ago.vendidos.some(p => p.id === 'b'));
+  chk('el cancelado no cuenta', !ago.vendidos.some(p => p.id === 'c') && ago.vendido === 150000);
+  chk('pago y reversión se anulan pero SÍ hubo datos', ago.cobrado === 0 && ago.hayDatos === true);
+  const dic = t2.totalesEn(e, new Date(2026, 11, 1), new Date(2027, 0, 1));
+  chk('y en diciembre no aparece como venta nueva', dic.vendidos.length === 0);
+}
+
+// ═══════════ 15. EL PASTEL ═══════════
+console.log('\n15. El pastel se arma por nombre de material y no se rompe con una rebanada');
+{
+  const t = api(nuevoEstado());
+  const materiales = [{id:'m1', nombre:'marcos'}, {id:'m2', nombre:'legos'}];
+  const gastos = [
+    {categoria:'material', materialId:'m1', montoCent: 20000},
+    {categoria:'material', materialId:'m1', montoCent: 10000},
+    {categoria:'material', materialId:'m2', montoCent: 30000},
+    {categoria:'envio', montoCent: 5000},
+    {categoria:'publicidad', montoCent: 100},       // 0.15%: va a "otros"
+    {categoria:'material', montoCent: 0}             // cero: no aparece
+  ];
+  const lista = t.gastosParaPastel(gastos, materiales);
+  // marcos y legos empatan en $300: el orden entre ellos no importa, la agrupación sí
+  const porNombre = Object.fromEntries(lista.map(x => [x.nombre, x.monto]));
+  chk('las compras se agrupan por nombre de material', porNombre.marcos === 30000 && porNombre.legos === 30000
+      && lista.slice(0, 2).every(x => x.monto === 30000));
+  chk('lo demás por categoría legible', lista.some(x => x.nombre === 'envío'));
+  chk('un gasto en cero no sale', !lista.some(x => x.monto === 0));
+  const rebs = t.rebanadas(lista);
+  chk('lo menor al 3% se junta en otros y dice qué incluye',
+      rebs.at(-1).nombre === 'otros' && rebs.at(-1).incluye.includes('publicidad'));
+  chk('los porcentajes suman 100', Math.abs(rebs.reduce((s,x) => s + x.pct, 0) - 100) < 0.01);
+  chk('sin gastos, sin rebanadas', t.rebanadas([]).length === 0);
+
+  // el nombre de material es texto libre: alguien podría llamar a un material "otros" de
+  // verdad, y eso NO debe duplicar la rebanada sintética
+  const conOtrosReal = [
+    {nombre:'otros', monto: 50000},               // >= 3%: rebanada real, grande
+    {nombre:'marcos', monto: 940000},
+    {nombre:'publicidad', monto: 100}              // < 3%: va al bucket sintético "otros"
+  ];
+  const rebsColision = t.rebanadas(conOtrosReal);
+  const otrosFusionado = rebsColision.filter(x => x.nombre === 'otros');
+  chk('no se duplica la rebanada "otros": se fusiona en una sola',
+      otrosFusionado.length === 1, JSON.stringify(rebsColision));
+  chk('el monto fusionado suma la rebanada real más lo sintético',
+      otrosFusionado[0].monto === 50100, otrosFusionado[0].monto);
+  chk('el desglose incluye lo que se juntó por chico',
+      otrosFusionado[0].incluye.includes('publicidad'));
+
+  const uno = t.arcosDonut([{nombre:'marcos', monto: 100}]);
+  chk('una sola rebanada es un círculo, no un arco degenerado', uno.length === 1 && uno[0].circulo === true);
+  const dos = t.arcosDonut([{nombre:'a', monto: 50}, {nombre:'b', monto: 50}]);
+  chk('dos mitades: dos arcos que empiezan arriba', dos.length === 2 && dos[0].d.startsWith('M 60.00 10.00'));
+  const grande = t.arcosDonut([{nombre:'a', monto: 90}, {nombre:'b', monto: 10}]);
+  chk('la rebanada de 90% marca el arco grande', / 1 1 /.test(grande[0].d) && / 0 1 /.test(grande[1].d));
+
+  chk('formato corto', t.fmtCorto(123456) === '$1.2k' && t.fmtCorto(1500000) === '$15k'
+      && t.fmtCorto(98000) === '$980' && t.fmtCorto(250000000) === '$2.5M' && t.fmtCorto(-123456) === '−$1.2k');
+}
+
+// ═══════════ 16. MOVIMIENTOS POR DÍA ═══════════
+console.log('\n16. El historial agrupa por día y una reversión no es un gasto');
+{
+  const e = nuevoEstado();
+  e.pedidos = [{id:'p', folio:'EL-1', cliente:{nombre:'Isa'}}];
+  e.cobros = [
+    {pedidoId:'p', tipo:'pago', montoCent: 100000, cuenta:'nu', fecha:'2026-09-08'},
+    {pedidoId:'p', tipo:'reversion', montoCent: 20000, cuenta:'nu', fecha:'2026-09-08'},
+    {pedidoId:'p', tipo:'pago', montoCent: 5000, cuenta:'efectivo', fecha:'2026-09-01'}
+  ];
+  e.gastos = [{concepto:'cinta', categoria:'material', montoCent: 30000, fecha:'2026-09-08'}];
+  const t = api(e);
+  const movs = t.movimientosDe(e, new Date(2026, 8, 1), new Date(2026, 9, 1));
+  chk('la reversión va en "entró", en negativo', movs.find(m => m.titulo.startsWith('corrección')).grupo === 'entro'
+      && movs.find(m => m.titulo.startsWith('corrección')).monto === -20000);
+  chk('lo más nuevo primero', movs[0].fecha === '2026-09-08' && movs.at(-1).fecha === '2026-09-01');
+  const dias = t.agruparPorDia(movs);
+  chk('dos días', dias.length === 2 && dias[0].fecha === '2026-09-08');
+  chk('el subtotal del día separa lo que entró de lo que salió',
+      dias[0].entro === 80000 && dias[0].salio === 30000 && dias[0].movs.length === 3);
+  const fuera = t.movimientosDe(e, new Date(2026, 9, 1), new Date(2026, 10, 1));
+  chk('fuera del periodo no hay nada', fuera.length === 0);
+}
+
+// ═══════════ 17. UNA REVERSIÓN RESTA — un solo lugar ═══════════
+console.log('\n17. montoCobro y porCuentaDe: la regla vive en un solo sitio');
+{
+  const t = api(nuevoEstado());
+  chk('un pago cuenta completo', t.montoCobro({tipo:'pago', montoCent: 10000}) === 10000);
+  chk('una reversión resta', t.montoCobro({tipo:'reversion', montoCent: 10000}) === -10000);
+  const cobros = [
+    {tipo:'pago', montoCent: 10000, cuenta:'nu'},
+    {tipo:'reversion', montoCent: 4000, cuenta:'nu'},
+    {tipo:'pago', montoCent: 5000, cuenta:'efectivo'},
+    {tipo:'pago', montoCent: 2000}   // sin cuenta especificada
+  ];
+  const porCuenta = t.porCuentaDe(cobros);
+  chk('agrupa y resta por cuenta', porCuenta.get('nu') === 6000 && porCuenta.get('efectivo') === 5000);
+  chk('lo sin cuenta cae en "sin especificar"', porCuenta.get('sin especificar') === 2000);
+}
+
+// ═══════════ 18. EL TOPE DEL HISTORIAL CORTA POR DÍAS COMPLETOS ═══════════
+console.log('\n18. El tope de movimientos nunca parte un día a la mitad');
+{
+  const t = api(nuevoEstado());
+  const dia = (fecha, n) => ({fecha, movs: Array.from({length:n}, () => ({}))});
+  const dias = [dia('2026-09-10', 120), dia('2026-09-09', 90), dia('2026-09-08', 50)];
+  const r = t.limitarPorDias(dias, 200);
+  chk('se queda con los días completos que caben (120+90=210 > 200 → solo el primero)',
+      r.dias.length === 1 && r.dias[0].fecha === '2026-09-10', JSON.stringify(r));
+  chk('dice cuántos movimientos quedaron fuera', r.ocultos === 140, r.ocultos);
+
+  const cabenDosDias = [dia('2026-09-10', 80), dia('2026-09-09', 90), dia('2026-09-08', 50)];
+  const r2 = t.limitarPorDias(cabenDosDias, 200);
+  chk('si caben completos varios días, se quedan todos los que quepan',
+      r2.dias.length === 2 && r2.ocultos === 50, JSON.stringify(r2));
+
+  const unDiaEnorme = [dia('2026-09-10', 500)];
+  const r3 = t.limitarPorDias(unDiaEnorme, 200);
+  chk('un solo día que ya rebasa el tope se queda completo: nunca queda vacío',
+      r3.dias.length === 1 && r3.ocultos === 0, JSON.stringify(r3));
+
+  const pocos = [dia('2026-09-10', 5), dia('2026-09-09', 3)];
+  const r4 = t.limitarPorDias(pocos, 200);
+  chk('si todo cabe, no se oculta nada', r4.dias.length === 2 && r4.ocultos === 0);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total

@@ -103,3 +103,40 @@ Cómo está armado, para no re-discutirlo:
 para pintar lo editado, nunca `innerHTML`. El texto lo escribe una persona de
 confianza, pero se muestra a todo internet, y las reglas de Firestore no pueden
 revisar lo que dice. Si alguien cambia eso por `innerHTML`, abre un XSS.
+
+## Resumen e indicadores (4-sep-2026)
+
+Lo que Gaby y Marcela pidieron en la junta del 2 de septiembre, textual: *"gráfica de pastel
+de gastos, 20% marcos, 30% impresión"* y *"un resumen del mes con comparación contra el mes
+anterior: este mes ganaste 20% más y gastaste 15% más"*. Decisiones que no hay que re-discutir:
+
+- **La venta nace cuando se captura el pedido** (`creadoEn` → fecha civil), no en
+  `fechaSolicitada`, que es cuándo la clienta quiere la pieza. Antes el resumen contaba por
+  esa fecha y un pedido capturado hoy para diciembre se "vendía" en diciembre. Función
+  `fechaAltaDe()`; cae a `fechaSolicitada` solo si no hay `creadoEn` (datos viejos).
+- **La comparación es pareja o lo dice.** Si el periodo es el corriente, se compara "hasta
+  hoy" contra los mismos días del anterior (`compararPeriodos()`). Si el mes pasado tuvo
+  menos días que los transcurridos (31 de marzo contra febrero), se compara contra el mes
+  completo y la leyenda lo dice: la bandera `parejo` decide el texto. Nunca se finge.
+- **Porcentaje solo con base positiva.** Sin base, se enseña el monto anterior. El balance
+  —y el cobrado, que puede ser negativo por reversiones— cruzan de signo, y ahí el
+  porcentaje miente (de −$100 a +$100 daría −200%): `textoBalance()` lo dice con palabras.
+- **Texto neutro, sin verde ni rojo en los deltas.** "Gastaste más" puede ser inventario para
+  crecer y "cobraste más" puede ser una venta vieja que por fin pagaron. El color solo marca
+  el signo del saldo, no juzga la tendencia.
+- **El pastel agrupa las compras por NOMBRE de material** (vía `materialId`) y lo demás por
+  categoría. Es lo que hace posible "20% marcos" sin cambiar el modelo. Lo que pesa menos del
+  3% se junta en "otros", y si ya existe un material llamado así, se fusiona.
+- **Una reversión no es un gasto.** En movimientos va dentro de "entró", en negativo y
+  rotulada "corrección de pago". Nunca cae en el filtro "salió".
+- **Solo se pinta la pestaña activa**, coalescido con `requestAnimationFrame` (`PINTORES`).
+  Antes cada snapshot repintaba las siete pantallas y perdía lo que el usuario tenía elegido.
+  `irA()` repinta al cambiar, así que la pestaña que se abre siempre llega fresca.
+- **Todo es derivación en el cliente.** Ni un campo nuevo ni una regla tocada. La lógica vive
+  antes del letrero PANTALLAS para que `test-logica.mjs` la extraiga (hoy 96 pruebas).
+- `esFechaValida()` reconstruye año/mes/día: `new Date('2026-02-31')` no falla, JavaScript
+  lo corre al 3 de marzo, y antes esa fecha pasaba.
+
+**Lo que la junta pidió y NO entró, por la regla de una feature por sesión, está en
+`IDEAS.md`** (ignorado por git: trae detalles del trato). Lo más urgente ahí: capturar el
+**origen del pedido** antes del lunes 7, que es cuando empiezan a usarla.

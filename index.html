@@ -70,6 +70,9 @@ label{display:block;font-size:12.5px;font-weight:500;color:var(--tinta-suave);ma
   padding:16px;box-shadow:var(--sombra)}
 .tarjeta+.tarjeta{margin-top:12px}
 .rejilla{display:grid;gap:12px}
+/* dentro de una rejilla el espacio lo da el gap: sin esto, `.tarjeta+.tarjeta` empujaba
+   12px hacia abajo a todas las tarjetas menos la primera y la fila quedaba chueca */
+.rejilla>.tarjeta{margin-top:0}
 @media(min-width:720px){.rejilla.dos{grid-template-columns:1fr 1fr}
   .rejilla.tres{grid-template-columns:repeat(3,1fr)}}
 
@@ -96,6 +99,33 @@ label{display:block;font-size:12.5px;font-weight:500;color:var(--tinta-suave);ma
   padding:6px 12px;font-size:15px;color:var(--tinta-suave)}
 .barra-fondo{background:var(--hueso);border-radius:6px;height:10px;overflow:hidden;margin-top:4px}
 .barra-relleno{background:var(--rosa);height:100%;border-radius:6px}
+/* comparación contra el periodo anterior: texto neutro, sin verde ni rojo — el color
+   no juzga si gastar más fue bueno o malo */
+.delta{font-size:12.5px;color:var(--gris);margin-top:5px;min-height:16px}
+.delta b{font-weight:600;color:var(--tinta)}
+/* historial agrupado por día */
+.dia-cab{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  padding:12px 0 4px;margin-top:4px;border-bottom:1px solid var(--arena);font-size:12.5px;color:var(--gris)}
+.dia-cab h4{margin:0;font-family:var(--cuerpo);color:var(--tinta);font-weight:600;font-size:13.5px}
+.dia-cab .monto{font-size:12.5px}
+/* el donut de gastos */
+.donut-caja{display:grid;grid-template-columns:128px 1fr;gap:14px;align-items:center}
+@media(max-width:480px){.donut-caja{grid-template-columns:1fr;justify-items:center}}
+.donut{width:128px;height:128px;display:block}
+.donut .reb{fill:none;stroke-width:16;cursor:pointer;transition:stroke-width .15s}
+.donut .reb.sel{stroke-width:21}
+.donut .fondo{fill:none;stroke:var(--hueso);stroke-width:16}
+.donut .total{font-size:15px;font-weight:600;text-anchor:middle;fill:var(--tinta);font-variant-numeric:tabular-nums}
+.donut .sub-donut{font-size:8px;text-anchor:middle;fill:var(--gris)}
+.leyenda{list-style:none;margin:0;padding:0;width:100%}
+.leyenda li{padding:0}
+.leyenda button{display:flex;align-items:center;gap:8px;font-size:13.5px;padding:3px 6px;
+  width:100%;cursor:pointer;border-radius:6px;background:none;border:0;color:inherit;
+  text-align:left;font-family:inherit}
+.leyenda button.sel,.leyenda button[aria-pressed="true"]{background:var(--hueso)}
+.leyenda .pto{width:10px;height:10px;border-radius:50%;flex:none}
+.leyenda .nom{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.leyenda .pct{color:var(--gris);font-size:12.5px;min-width:38px;text-align:right;font-variant-numeric:tabular-nums}
 .vacio{text-align:center;color:var(--gris);padding:28px 16px;font-size:14px}
 .aviso{border-radius:12px;padding:12px 14px;font-size:13.5px;margin-bottom:12px}
 .aviso.falta{background:var(--ambar-fondo);color:var(--ambar);border:1px solid #E8D5A8}
@@ -244,13 +274,30 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
     <section class="pagina" id="pg-dinero">
       <div class="titulo">
         <div><h2>Movimientos</h2>
-          <p class="sub" id="sub-semana">la semana</p></div>
+          <p class="sub">todo lo que entró y salió, día por día</p></div>
         <button class="btn" id="btn-nuevo-gasto">+ gasto</button>
+      </div>
+      <!-- periodo propio, separado del del resumen: ir a "agosto" en movimientos no
+           tiene por qué mover el resumen, ni al revés -->
+      <div class="chips" style="margin-bottom:12px">
+        <button class="chip" id="mov-semana" aria-pressed="true">semana</button>
+        <button class="chip" id="mov-mes" aria-pressed="false">mes</button>
+        <span style="flex:1"></span>
+        <button class="nav-periodo" id="mov-atras" aria-label="periodo anterior">‹</button>
+        <b id="mov-titulo" style="min-width:150px;text-align:center;font-size:14px">—</b>
+        <button class="nav-periodo" id="mov-adelante" aria-label="periodo siguiente">›</button>
       </div>
       <div class="rejilla tres" id="resumen-dinero" style="margin-bottom:16px"></div>
       <div id="detalle-dinero"></div>
       <div class="tarjeta" style="margin-top:12px">
-        <h3 style="font-size:18px;margin-bottom:8px">Historial</h3>
+        <div class="titulo" style="margin-bottom:6px;align-items:center">
+          <h3 style="font-size:18px">Historial</h3>
+          <div class="chips">
+            <button class="chip" id="mov-f-todos" aria-pressed="true">todo</button>
+            <button class="chip" id="mov-f-entro" aria-pressed="false">entró</button>
+            <button class="chip" id="mov-f-salio" aria-pressed="false">salió</button>
+          </div>
+        </div>
         <div id="historial-dinero"></div>
       </div>
     </section>
@@ -279,7 +326,9 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
         <b id="res-titulo" style="min-width:150px;text-align:center;font-size:14px">—</b>
         <button class="nav-periodo" id="res-adelante" aria-label="periodo siguiente">›</button>
       </div>
-      <div class="rejilla tres" id="res-cifras" style="margin-bottom:12px"></div>
+      <!-- cuatro cifras en 2×2: con tres columnas la cuarta quedaba huérfana -->
+      <div class="rejilla dos" id="res-cifras" style="margin-bottom:8px"></div>
+      <p class="nota" id="res-comparado" style="margin:0 0 12px 2px"></p>
       <div id="res-cuerpo"></div>
     </section>
 
@@ -385,7 +434,10 @@ if (!SIN_CONFIGURAR) {
 const aCent = n => Math.round(Number(n) * 100);
 function dinero(c) {
   const v = Number.isFinite(c) ? c : 0;   // un dato corrupto se muestra como $0.00, no como NaN
-  return '$' + (v / 100).toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2});
+  // el signo va ANTES del símbolo ("−$50.00"): "$-50.00" se lee como un precio raro, no
+  // como un negativo.
+  const signo = v < 0 ? '−' : '';
+  return signo + '$' + (Math.abs(v) / 100).toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2});
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -398,7 +450,14 @@ function hoyISO() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
-const esFechaValida = f => /^\d{4}-\d{2}-\d{2}$/.test(f) && !isNaN(fechaLocal(f).getTime());
+// Se reconstruye año/mes/día y se compara: `new Date('2026-02-31')` NO falla, JavaScript
+// lo corre al 3 de marzo en silencio, y con solo `isNaN` esa fecha pasaba como válida.
+function esFechaValida(f) {
+  if (typeof f !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(f)) return false;
+  const [a, m, d] = f.split('-').map(Number);
+  const t = fechaLocal(f);
+  return t.getFullYear() === a && t.getMonth() + 1 === m && t.getDate() === d;
+}
 function diaHabil(d) { const n = d.getDay(); return n !== 0 && n !== 6; }
 // Días hábiles entre dos fechas (sin contar el día de inicio). No conoce días festivos:
 // es una estimación y así está redactada en pantalla, nunca como promesa.
@@ -465,12 +524,19 @@ const $ = id => document.getElementById(id);
 // Los cobros son un LIBRO INMUTABLE: para corregir se agrega una reversión, no se borra.
 function cobrosDe(pedidoId) { return estado.cobros.filter(c => c.pedidoId === pedidoId); }
 function pagadoDe(pedidoId) {
-  return cobrosDe(pedidoId).reduce((s,c) =>
-    s + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+  return cobrosDe(pedidoId).reduce((s,c) => s + montoCobro(c), 0);
 }
 // El saldo NO se trunca en cero a propósito: si sale negativo es un sobrepago, y eso hay
 // que verlo, no esconderlo.
 function saldoDe(p) { return (p.totalCent || 0) - pagadoDe(p.id); }
+// La regla "una reversión resta" vivía copiada en cinco reduces distintos: corregirla en
+// cuatro y dejar el quinto mintiendo ya pasó. De aquí para adelante solo vive aquí.
+const montoCobro = c => c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0);
+function porCuentaDe(cobros) {
+  const m = new Map();
+  cobros.forEach(c => { const k = c.cuenta || 'sin especificar'; m.set(k, (m.get(k)||0) + montoCobro(c)); });
+  return m;
+}
 
 // La fecha que de verdad manda. Para un envío foráneo la pieza tiene que estar lista
 // antes, porque después vienen los días de paquetería.
@@ -580,8 +646,9 @@ function parseBloqueEL(texto) {
 }
 
 // ── La semana, que es como Gaby quiere cuadrar ─────────────────
-function semanaActual() {
-  const d = new Date(); const dia = (d.getDay() + 6) % 7; // lunes = 0
+// `hoy` se puede inyectar para que las pruebas no dependan del día en que corren.
+function semanaActual(hoy = new Date()) {
+  const d = new Date(hoy); const dia = (d.getDay() + 6) % 7; // lunes = 0
   const lunes = new Date(d); lunes.setDate(d.getDate() - dia); lunes.setHours(0,0,0,0);
   const domingo = new Date(lunes); domingo.setDate(lunes.getDate() + 7);
   return {desde: lunes, hasta: domingo};
@@ -592,21 +659,237 @@ const enSemana = (fISO, s) => esFechaValida(fISO)
 // con desplazamiento hacia atrás y de vuelta. offset 0 = el actual.
 const MESES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
                   'septiembre','octubre','noviembre','diciembre'];
-function rangoPeriodo(tipo, offset) {
+function rangoPeriodo(tipo, offset, hoy = new Date()) {
   if (tipo === 'mes') {
-    const hoy = new Date();
     const desde = new Date(hoy.getFullYear(), hoy.getMonth() + offset, 1);
     const hasta = new Date(hoy.getFullYear(), hoy.getMonth() + offset + 1, 1);
     const titulo = offset === 0 ? 'este mes'
       : MESES_ES[desde.getMonth()] + ' ' + desde.getFullYear();
     return {desde, hasta, titulo};
   }
-  const s = semanaActual();
+  const s = semanaActual(hoy);
   const desde = new Date(s.desde); desde.setDate(desde.getDate() + offset * 7);
   const hasta = new Date(desde); hasta.setDate(desde.getDate() + 7);
   const titulo = offset === 0 ? 'esta semana'
     : 'semana del ' + desde.getDate() + ' de ' + MESES_ES[desde.getMonth()];
   return {desde, hasta, titulo};
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  INDICADORES — comparar contra el periodo anterior (4-sep-2026)
+// ═══════════════════════════════════════════════════════════════
+// Lo que Gaby pidió textual: "este mes ganaste 20% más y gastaste 15% más". Todo lo de
+// aquí es derivación pura sobre pedidos, cobros y gastos: no hay campos nuevos ni
+// escrituras. Vive antes del letrero de PANTALLAS para que test-logica.mjs lo extraiga.
+
+// Firestore guarda `creadoEn` como Timestamp; la app compara todo en fecha civil local.
+function fechaCivilDe(v) {
+  const d = v && typeof v.toDate === 'function' ? v.toDate() : (v instanceof Date ? v : null);
+  if (!d || isNaN(d.getTime())) return null;
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+// La VENTA nace cuando se captura el pedido. `fechaSolicitada` es cuándo la clienta quiere
+// la pieza: un pedido capturado hoy para diciembre NO es una venta de diciembre. Antes el
+// resumen contaba por esa fecha y la comparación entre meses habría salido falsa.
+// Costo conocido y aceptado: en el navegador de quien captura, `creadoEn` es `null` un
+// instante — desde que se guarda el pedido hasta que el servidor confirma el
+// serverTimestamp(). En ese instante el pedido cae a fechaSolicitada, y solo lo ve quien
+// lo capturó; se corrige solo con el siguiente snapshot de Firestore. No amerita parche.
+const fechaAltaDe = p => fechaCivilDe(p.creadoEn)
+  || (esFechaValida(p.fechaSolicitada) ? p.fechaSolicitada : null);
+
+// Solo para el centro del donut, donde no cabe el monto completo. Las tarjetas siguen con
+// el peso exacto: a Gaby le importa el centavo, no la tendencia.
+function fmtCorto(c) {
+  const v = Number.isFinite(c) ? c / 100 : 0;
+  const abs = Math.abs(v), signo = v < 0 ? '−' : '';
+  const sinCero = s => s.replace(/\.0$/, '');
+  if (abs >= 1e6) return signo + '$' + sinCero((abs / 1e6).toFixed(1)) + 'M';
+  if (abs >= 1e4) return signo + '$' + Math.round(abs / 1e3) + 'k';
+  if (abs >= 1e3) return signo + '$' + sinCero((abs / 1e3).toFixed(1)) + 'k';
+  return signo + '$' + Math.round(abs);
+}
+
+const sumaDias  = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const diasEntre = (a, b) => Math.round((b - a) / 86400000);   // las dos a medianoche local
+
+// Los dos tramos a comparar. Si el periodo es el CORRIENTE se compara "hasta hoy" contra
+// los mismos días del anterior: al día 5 del mes, contra los primeros 5 días del mes
+// pasado. Comparar un mes a medias contra uno completo siempre sale "peor" y engaña.
+// El tramo actual se cierra en mañana a medianoche para que una captura con fecha futura
+// no entre al actual sin tener su par en el anterior. Si el mes pasado tuvo menos días
+// que los transcurridos (día 31 contra febrero), se compara contra ese mes completo y la
+// leyenda lo dice — no se finge "mismos días".
+function compararPeriodos(tipo, offset, hoy = new Date()) {
+  const r = rangoPeriodo(tipo, offset, hoy);
+  const ant = rangoPeriodo(tipo, offset - 1, hoy);
+  const nombre = tipo === 'mes' ? MESES_ES[ant.desde.getMonth()] : 'la semana pasada';
+  if (offset !== 0) {
+    // "parejo" solo tiene sentido cuando se compara el periodo CORRIENTE contra "hasta
+    // hoy" del anterior; un periodo ya cerrado siempre se compara completo contra
+    // completo, así que nunca lleva el sufijo de "mismos días".
+    return { actual: {desde: r.desde, hasta: r.hasta}, anterior: {desde: ant.desde, hasta: ant.hasta},
+             parcial: false, parejo: false,
+             leyenda: tipo === 'mes' ? nombre + ' ' + ant.desde.getFullYear() : 'la semana anterior' };
+  }
+  const h0 = new Date(hoy); h0.setHours(0, 0, 0, 0);
+  const manana = sumaDias(h0, 1);
+  const n = diasEntre(r.desde, manana);            // días transcurridos, hoy incluido
+  const diasAnt = diasEntre(ant.desde, ant.hasta);
+  const nAnt = Math.min(n, diasAnt);
+  return {
+    actual: {desde: r.desde, hasta: manana},
+    anterior: {desde: ant.desde, hasta: sumaDias(ant.desde, nAnt)},
+    // el mes pasado tuvo menos días que los transcurridos (día 31 contra febrero): se
+    // comparó contra ese mes completo, no contra los "mismos días" — la leyenda no debe
+    // fingir que sí lo fueron.
+    parcial: true, parejo: nAnt === n, n, nAnt,
+    leyenda: nAnt >= diasAnt ? nombre + ' completo'
+           : nAnt === 1     ? 'el primer día de ' + nombre
+           : 'los primeros ' + nAnt + ' días de ' + nombre
+  };
+}
+
+// Los totales de un tramo. `hayDatos` mira si EXISTEN registros, no si el neto es distinto
+// de cero: un pago y su reversión suman cero y aun así hubo actividad que comparar.
+function totalesEn(estado, desde, hasta) {
+  const en = f => esFechaValida(f) && fechaLocal(f) >= desde && fechaLocal(f) < hasta;
+  const vendidos = estado.pedidos.filter(p => p.estado !== 'cancelado' && en(fechaAltaDe(p)));
+  const cobros = estado.cobros.filter(c => en(c.fecha));
+  const gastos = estado.gastos.filter(g => en(g.fecha));
+  const cobrado = cobros.reduce((a,c) => a + montoCobro(c), 0);
+  const gastado = gastos.reduce((a,g) => a + (g.montoCent||0), 0);
+  return { vendidos, cobros, gastos,
+           vendido: vendidos.reduce((t,p) => t + (p.totalCent||0), 0),
+           cobrado, gastado, balance: cobrado - gastado,
+           hayDatos: vendidos.length + cobros.length + gastos.length > 0 };
+}
+// Cambio porcentual para montos que no bajan de cero. Sin base, no hay porcentaje.
+function deltaPct(actual, anterior) {
+  // un `actual` no finito (undefined, NaN...) producía "−NaN%" en vez de callarse.
+  if (!Number.isFinite(actual) || !Number.isFinite(anterior) || anterior <= 0) return null;
+  return (actual - anterior) / anterior * 100;
+}
+// Texto neutro, sin veredicto: "gastaste más" puede ser inventario para crecer, y
+// "cobraste más" puede ser una venta vieja que por fin pagaron. El color no juzga.
+function textoDelta(pct) {
+  if (pct === null) return null;
+  const r = Math.round(pct);
+  if (r === 0) return 'igual que antes';
+  return (r > 0 ? '▲ +' : '▼ −') + Math.abs(r) + '%';
+}
+// El balance sí puede ser negativo o cambiar de signo, y ahí el porcentaje miente:
+// de −$100 a +$100 daría "−200%" siendo una mejora. Se dice con palabras.
+function textoBalance(actual, anterior) {
+  if (actual === 0 && anterior === 0) return 'igual que antes';
+  if (anterior < 0 && actual >= 0) return 'pasaste de pérdida a saldo positivo';
+  if (anterior >= 0 && actual < 0) return 'pasaste a pérdida';
+  if (anterior > 0 && actual > 0)  return textoDelta(deltaPct(actual, anterior));
+  const dif = actual - anterior;
+  return (dif >= 0 ? '+' : '−') + dinero(Math.abs(dif)) + ' contra el anterior';
+}
+
+// ── el pastel de gastos ─────────────────────────────────────────
+// Gaby quiere ver "20% marcos, 30% impresión". Las categorías de la app son gruesas
+// (material, envío...), pero cada compra de material trae su materialId: esas se agrupan
+// por el NOMBRE del material, y lo demás por categoría. Sin cambiar el modelo.
+const NOMBRE_CATEGORIA = {material:'material', envio:'envío', herramienta:'herramienta',
+                          publicidad:'publicidad', otro:'otro'};
+function gastosParaPastel(gastos, materiales) {
+  const nombreMat = new Map((materiales || []).map(m => [m.id, m.nombre]));
+  const acum = new Map();
+  gastos.forEach(g => {
+    const k = (g.materialId && nombreMat.get(g.materialId))
+           || NOMBRE_CATEGORIA[g.categoria] || g.categoria || 'otro';
+    acum.set(k, (acum.get(k) || 0) + (g.montoCent || 0));
+  });
+  return [...acum].map(([nombre, monto]) => ({nombre, monto}))
+    .filter(x => x.monto > 0).sort((a,b) => b.monto - a.monto);
+}
+// Las rebanadas menores al umbral se juntan en "otros" para que el pastel se lea. La
+// lista de barras conserva el desglose completo y "otros" dice qué incluye.
+function rebanadas(lista, umbral = 0.03) {
+  const total = lista.reduce((t,x) => t + x.monto, 0);
+  if (total <= 0) return [];
+  const grandes = lista.filter(x => x.monto / total >= umbral);
+  const chicas  = lista.filter(x => x.monto / total <  umbral);
+  const out = grandes.map(x => ({nombre: x.nombre, monto: x.monto, pct: x.monto / total * 100, incluye: null}));
+  if (chicas.length) {
+    const m = chicas.reduce((t,x) => t + x.monto, 0);
+    const nombres = chicas.map(x => x.nombre);
+    // El nombre de material es texto libre: si YA hay una rebanada real llamada "otros"
+    // (alguien compró algo así de literal), no se crea una segunda con el mismo nombre —
+    // se fusiona en esa, sumando el monto y concatenando el desglose.
+    const existente = out.find(x => x.nombre === 'otros');
+    if (existente) {
+      existente.monto += m;
+      existente.pct = existente.monto / total * 100;
+      existente.incluye = (existente.incluye || []).concat(nombres);
+    } else {
+      out.push({nombre: 'otros', monto: m, pct: m / total * 100, incluye: nombres});
+    }
+  }
+  return out;
+}
+// Geometría del donut: un arco por rebanada sobre un círculo de radio r. Una sola
+// rebanada es un círculo completo — un arco de 360° con el mismo punto de inicio y fin
+// degenera y no se pinta.
+function arcosDonut(rebs, cx = 60, cy = 60, r = 50) {
+  const total = rebs.reduce((t,x) => t + x.monto, 0);
+  if (total <= 0) return [];
+  if (rebs.length === 1) return [{...rebs[0], circulo: true, d: null}];
+  let ang = -Math.PI / 2;
+  return rebs.map(x => {
+    const a0 = ang, a1 = ang + (x.monto / total) * 2 * Math.PI; ang = a1;
+    const p = a => [ (cx + r * Math.cos(a)).toFixed(2), (cy + r * Math.sin(a)).toFixed(2) ];
+    const [x0, y0] = p(a0), [x1, y1] = p(a1);
+    const grande = (a1 - a0) > Math.PI ? 1 : 0;
+    return {...x, circulo: false, d: `M ${x0} ${y0} A ${r} ${r} 0 ${grande} 1 ${x1} ${y1}`};
+  });
+}
+
+// ── movimientos por día ────────────────────────────────────────
+// Cobros y gastos en una sola forma. Una REVERSIÓN no es dinero que salió: es una
+// corrección dentro de lo que entró, con signo negativo y rotulada como tal.
+function movimientosDe(estado, desde, hasta) {
+  const en = f => esFechaValida(f) && fechaLocal(f) >= desde && fechaLocal(f) < hasta;
+  const pedidoDe = id => estado.pedidos.find(p => p.id === id);
+  return [
+    ...estado.cobros.filter(c => en(c.fecha)).map(c => {
+      const p = pedidoDe(c.pedidoId), rev = c.tipo === 'reversion';
+      return { fecha: c.fecha, grupo: 'entro', monto: montoCobro(c),
+               titulo: (rev ? 'corrección de pago' : 'pago') + (p ? ' · ' + (p.cliente?.nombre || p.folio || '') : ''),
+               meta: [c.cuenta || '', p && p.folio ? p.folio : ''].filter(Boolean).join(' · ') };
+    }),
+    ...estado.gastos.filter(g => en(g.fecha)).map(g => ({
+      fecha: g.fecha, grupo: 'salio', monto: g.montoCent || 0,
+      titulo: g.concepto || 'gasto', meta: NOMBRE_CATEGORIA[g.categoria] || g.categoria || '' }))
+  ].sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
+}
+// Un encabezado por día con lo que entró y lo que salió ese día, por separado: el neto
+// solo esconde que entraron $1,000 y salieron $500. El caso de uso es literal — "el
+// martes se nos fueron 500 pesos, ¿a dónde?".
+function agruparPorDia(movs) {
+  const dias = new Map();
+  movs.forEach(m => {
+    if (!dias.has(m.fecha)) dias.set(m.fecha, {fecha: m.fecha, movs: [], entro: 0, salio: 0});
+    const d = dias.get(m.fecha); d.movs.push(m);
+    if (m.grupo === 'salio') d.salio += m.monto; else d.entro += m.monto;
+  });
+  return [...dias.values()].sort((a,b) => b.fecha.localeCompare(a.fecha));
+}
+// El tope de movimientos a mostrar se aplica por DÍAS COMPLETOS, nunca a media lista: se
+// toman días enteros mientras el acumulado no rebase el tope, y siempre queda al menos
+// uno (aunque ese solo día ya rebase el tope) para que el historial nunca salga vacío.
+function limitarPorDias(dias, tope) {
+  let acum = 0, corte = dias.length;
+  for (let i = 0; i < dias.length; i++) {
+    acum += dias[i].movs.length;
+    if (acum > tope && i > 0) { corte = i; break; }
+  }
+  const visibles = dias.slice(0, corte);
+  const ocultos = dias.slice(corte).reduce((s,d) => s + d.movs.length, 0);
+  return { dias: visibles, ocultos };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -711,7 +994,7 @@ function pintarCobros() {
   const total = conSaldo.reduce((s,x) => s + Math.max(0, x.saldo), 0);
   const s = semanaActual();
   const cobradoSemana = estado.cobros.filter(c => enSemana(c.fecha, s))
-    .reduce((a,c) => a + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+    .reduce((a,c) => a + montoCobro(c), 0);
 
   $('resumen-cobros').innerHTML = `
     <div class="tarjeta"><div class="sub">te deben en total</div>
@@ -784,70 +1067,68 @@ function demandaDe(materialId) {
 }
 
 // ── Dinero ─────────────────────────────────────────────────────
-function pintarDinero() {
-  const s = semanaActual();
-  $('sub-semana').textContent = 'semana del ' +
-    s.desde.toLocaleDateString('es-MX',{day:'numeric',month:'long'});
-  const entro = estado.cobros.filter(c => enSemana(c.fecha, s))
-    .reduce((a,c) => a + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
-  const salio = estado.gastos.filter(g => enSemana(g.fecha, s))
-    .reduce((a,g) => a + (g.montoCent||0), 0);
+// Periodo y filtro PROPIOS de esta pestaña: navegar a "agosto" aquí no mueve el resumen.
+let movTipo = 'semana', movOffset = 0, movFiltro = 'todos';
+const fechaLarga = f => esFechaValida(f)
+  ? fechaLocal(f).toLocaleDateString('es-MX', {weekday:'long', day:'numeric', month:'long'}) : String(f || '');
+const conSigno = c => (c < 0 ? '−' : '+') + dinero(Math.abs(c));
 
+function pintarDinero() {
+  const r = rangoPeriodo(movTipo, movOffset);
+  $('mov-titulo').textContent = r.titulo;
+  $('mov-semana').setAttribute('aria-pressed', movTipo === 'semana');
+  $('mov-mes').setAttribute('aria-pressed', movTipo === 'mes');
+  $('mov-adelante').disabled = movOffset >= 0;
+  ['todos','entro','salio'].forEach(f => $('mov-f-' + f).setAttribute('aria-pressed', movFiltro === f));
+
+  const t = totalesEn(estado, r.desde, r.hasta);
+  // "entró" puede ser negativo si el periodo solo tuvo reversiones: la clase se decide
+  // por el signo, no se asume positiva a fuerza.
   $('resumen-dinero').innerHTML = `
     <div class="tarjeta"><div class="sub">entró</div>
-      <div class="monto pos" style="font-size:26px">${dinero(entro)}</div></div>
+      <div class="monto ${t.cobrado < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(t.cobrado)}</div></div>
     <div class="tarjeta"><div class="sub">salió</div>
-      <div class="monto neg" style="font-size:26px">${dinero(salio)}</div></div>
+      <div class="monto neg" style="font-size:26px">${dinero(t.gastado)}</div></div>
     <div class="tarjeta"><div class="sub">te queda</div>
-      <div class="monto" style="font-size:26px">${dinero(entro - salio)}</div></div>`;
+      <div class="monto ${t.balance < 0 ? 'neg' : ''}" style="font-size:26px">${dinero(t.balance)}</div></div>`;
 
   // Por cuenta: Gaby dijo que a veces le cae a su tarjeta y a veces a la de Marce.
-  const porCuenta = new Map();
-  estado.cobros.filter(c => enSemana(c.fecha, s)).forEach(c => {
-    const k = c.cuenta || 'sin especificar';
-    porCuenta.set(k, (porCuenta.get(k)||0) + (c.tipo==='reversion' ? -(c.montoCent||0) : (c.montoCent||0)));
-  });
-  const gastosSemana = estado.gastos.filter(g => enSemana(g.fecha, s))
-    .sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
-
+  const porCuenta = porCuentaDe(t.cobros);
   $('detalle-dinero').innerHTML = `
-    <div class="rejilla dos">
-      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">En qué cuenta entró</h3>
-        ${porCuenta.size ? `<ul class="lista">` + [...porCuenta].map(([k,v]) =>
-          `<li class="reng"><div class="reng-cuerpo">${esc(k)}</div>
-            <div class="reng-lado monto">${dinero(v)}</div></li>`).join('') + `</ul>`
-          : `<p class="vacio">Sin cobros esta semana.</p>`}</div>
-      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Gastos de la semana</h3>
-        ${gastosSemana.length ? `<ul class="lista">` + gastosSemana.map(g =>
-          `<li class="reng"><div class="reng-cuerpo"><div class="reng-tit">${esc(g.concepto)}</div>
-            <div class="reng-meta">${esc(g.categoria||'')} · ${fechaCorta(g.fecha)}</div></div>
-            <div class="reng-lado monto neg">${dinero(g.montoCent)}</div></li>`).join('') + `</ul>`
-          : `<p class="vacio">Sin gastos capturados.</p>`}</div>
-    </div>`;
+    <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">En qué cuenta entró</h3>
+      ${porCuenta.size ? `<ul class="lista">` + [...porCuenta].map(([k,v]) =>
+        `<li class="reng"><div class="reng-cuerpo">${esc(k)}</div>
+          <div class="reng-lado monto">${dinero(v)}</div></li>`).join('') + `</ul>`
+        : `<p class="vacio">Sin cobros en ${esc(r.titulo)}.</p>`}</div>`;
 
-  // historial completo: cobros y gastos mezclados, lo más nuevo arriba. Se corta en 80
-  // renglones para no volver eterna la página; el resumen es el lugar de los totales.
-  const pedidoDe = id => estado.pedidos.find(p => p.id === id);
-  const movs = [
-    ...estado.cobros.map(c => {
-      const p = pedidoDe(c.pedidoId);
-      return {fecha: c.fecha, esEntrada: c.tipo !== 'reversion',
-        monto: c.montoCent || 0,
-        titulo: (c.tipo === 'reversion' ? 'corrección de pago' : 'pago') +
-                (p ? ' · ' + (p.cliente?.nombre || p.folio || '') : ''),
-        meta: (c.cuenta || '') + (p && p.folio ? ' · ' + p.folio : '')};
-    }),
-    ...estado.gastos.map(g => ({fecha: g.fecha, esEntrada: false, monto: g.montoCent || 0,
-      titulo: g.concepto || 'gasto', meta: g.categoria || ''}))
-  ].sort((a,b) => String(b.fecha).localeCompare(String(a.fecha))).slice(0, 80);
+  // El historial del periodo, agrupado por día y con el subtotal del día por separado
+  // (lo que entró y lo que salió, no el neto). El tope se aplica por DÍAS COMPLETOS: un
+  // slice() a la cruda antes de agrupar podía cortar un día a la mitad, y su subtotal
+  // solo sumaba lo visible pero se leía como si fuera el total real de ese día.
+  const todos = movimientosDe(estado, r.desde, r.hasta);
+  const filtrados = movFiltro === 'todos' ? todos : todos.filter(m => m.grupo === movFiltro);
+  const TOPE = 200;
+  const { dias, ocultos } = limitarPorDias(agruparPorDia(filtrados), TOPE);
+  const aviso = ocultos > 0
+    ? `<p class="nota" style="margin:8px 0">Mostrando los días más recientes; quedaron ${ocultos} movimiento${ocultos===1?'':'s'} fuera. Acorta el periodo para ver el resto.</p>` : '';
 
-  $('historial-dinero').innerHTML = !movs.length
-    ? `<p class="vacio">Todavía no hay movimientos. El primer pago o gasto que registres aparece aquí.</p>`
-    : `<ul class="lista">` + movs.map(m => `<li class="reng">
+  $('historial-dinero').innerHTML = !dias.length
+    ? `<p class="vacio">${todos.length
+        ? 'Nada de este tipo en ' + esc(r.titulo) + '.'
+        : 'Sin movimientos en ' + esc(r.titulo) + '. El primer pago o gasto que registres aparece aquí.'}</p>`
+    : aviso + dias.map(d => `
+      <div class="dia-cab"><h4><time datetime="${esc(d.fecha)}">${esc(fechaLarga(d.fecha))}</time></h4>
+        ${d.movs.length > 1 ? `<span>
+          ${d.movs.some(m => m.grupo === 'entro') ? `<span class="monto pos">${conSigno(d.entro)}</span>` : ''}
+          ${d.movs.some(m => m.grupo === 'entro') && d.salio ? ' · ' : ''}
+          ${d.salio ? `<span class="monto neg">−${dinero(Math.abs(d.salio))}</span>` : ''}</span>` : ''}
+      </div>
+      <ul class="lista">${d.movs.map(m => `<li class="reng">
         <div class="reng-cuerpo"><div class="reng-tit">${esc(m.titulo)}</div>
-          <div class="reng-meta">${esc(m.meta)}${m.meta ? ' · ' : ''}${fechaCorta(m.fecha)}</div></div>
-        <div class="reng-lado monto ${m.esEntrada ? 'pos' : 'neg'}">${m.esEntrada ? '+' : '−'}${dinero(m.monto)}</div>
-      </li>`).join('') + `</ul>`;
+          ${m.meta ? `<div class="reng-meta">${esc(m.meta)}</div>` : ''}</div>
+        <div class="reng-lado monto ${m.grupo === 'entro' && m.monto >= 0 ? 'pos' : 'neg'}">
+          ${m.grupo === 'salio' ? '−' + dinero(Math.abs(m.monto)) : conSigno(m.monto)}</div>
+      </li>`).join('')}</ul>`).join('');
 }
 
 // ── Pendientes ─────────────────────────────────────────────────
@@ -875,7 +1156,7 @@ function pintarInicio() {
   const deben = estado.pedidos.filter(p => p.estado !== 'cancelado')
     .reduce((t, p) => t + Math.max(0, saldoDe(p)), 0);
   const entro = estado.cobros.filter(c => enSemana(c.fecha, s))
-    .reduce((a,c) => a + (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
+    .reduce((a,c) => a + montoCobro(c), 0);
   const salio = estado.gastos.filter(g => enSemana(g.fecha, s))
     .reduce((a,g) => a + (g.montoCent||0), 0);
   $('inicio-cifras').innerHTML = `
@@ -919,50 +1200,75 @@ function pintarInicio() {
 
 // ── Resumen: el cierre que Gaby pidió, semanal (o mensual) ─────
 let resTipo = 'semana', resOffset = 0;
+// La rebanada elegida del donut se guarda aquí, no en el DOM: cada snapshot de Firestore
+// repinta la pestaña y sin esto la selección se perdía a media lectura. Se guarda el
+// NOMBRE, no la posición: un índice se rompía en silencio si el orden cambiaba entre
+// pintados o al navegar de periodo.
+let donutSel = null;
+const COLORES_DONUT = ['#A2564A','#C98A80','#4A3330','#8A6A1F','#40705C',
+                       '#BB7466','#5C4741','#D9B8B0','#6E5F59','#E8C4BC'];
+
 function pintarResumen() {
   const r = rangoPeriodo(resTipo, resOffset);
   $('res-titulo').textContent = r.titulo;
   $('res-semana').setAttribute('aria-pressed', resTipo === 'semana');
   $('res-mes').setAttribute('aria-pressed', resTipo === 'mes');
   $('res-adelante').disabled = resOffset >= 0;
-  const en = f => esFechaValida(f) && fechaLocal(f) >= r.desde && fechaLocal(f) < r.hasta;
 
-  // lo VENDIDO son los pedidos que nacieron en el periodo; lo COBRADO es el dinero que
-  // de verdad entró. Que se vean juntos es a propósito: la brecha entre ambos es
-  // exactamente "lo que se te está pasando cobrar".
-  const vendidos = estado.pedidos.filter(p => p.estado !== 'cancelado' && en(p.fechaSolicitada));
-  const vendido = vendidos.reduce((t,p) => t + (p.totalCent||0), 0);
-  const cobros = estado.cobros.filter(c => en(c.fecha));
-  const cobrado = cobros.reduce((a,c) => a + (c.tipo==='reversion' ? -(c.montoCent||0) : (c.montoCent||0)), 0);
-  const gastos = estado.gastos.filter(g => en(g.fecha));
-  const gastado = gastos.reduce((a,g) => a + (g.montoCent||0), 0);
-  const balance = cobrado - gastado;
+  // Las tarjetas muestran el periodo COMPLETO (una captura con fecha futura se ve). La
+  // comparación usa los tramos parejos de compararPeriodos(): hasta hoy contra los
+  // mismos días del anterior. Lo VENDIDO son los pedidos que nacieron en el periodo; lo
+  // COBRADO es el dinero que de verdad entró. Que se vean juntos es a propósito: la
+  // brecha entre ambos es exactamente "lo que se te está pasando cobrar".
+  const t   = totalesEn(estado, r.desde, r.hasta);
+  const cmp = compararPeriodos(resTipo, resOffset);
+  const ta  = totalesEn(estado, cmp.actual.desde, cmp.actual.hasta);
+  const tp  = totalesEn(estado, cmp.anterior.desde, cmp.anterior.hasta);
+  const compara = tp.hayDatos;
+  // sin base no hay porcentaje: se enseña el monto anterior y ya
+  const deltaDe = (act, ant) => textoDelta(deltaPct(act, ant)) || ('antes ' + dinero(ant));
+  const linea = txt => `<div class="delta">${compara && txt ? '<b>' + esc(txt) + '</b>' : ''}</div>`;
 
   $('res-cifras').innerHTML = `
-    <div class="tarjeta"><div class="sub">vendiste (${vendidos.length} pedido${vendidos.length===1?'':'s'})</div>
-      <div class="monto" style="font-size:26px">${dinero(vendido)}</div></div>
+    <div class="tarjeta"><div class="sub">vendiste (${t.vendidos.length} pedido${t.vendidos.length===1?'':'s'} nuevo${t.vendidos.length===1?'':'s'})</div>
+      <div class="monto" style="font-size:26px">${dinero(t.vendido)}</div>
+      ${linea(deltaDe(ta.vendido, tp.vendido))}</div>
     <div class="tarjeta"><div class="sub">cobraste</div>
-      <div class="monto pos" style="font-size:26px">${dinero(cobrado)}</div></div>
+      <div class="monto ${t.cobrado < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(t.cobrado)}</div>
+      ${linea(textoBalance(ta.cobrado, tp.cobrado))}</div>
+    <div class="tarjeta"><div class="sub">gastaste</div>
+      <div class="monto neg" style="font-size:26px">${dinero(t.gastado)}</div>
+      ${linea(deltaDe(ta.gastado, tp.gastado))}</div>
     <div class="tarjeta"><div class="sub">te quedó</div>
-      <div class="monto ${balance < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(balance)}</div></div>`;
+      <div class="monto ${t.balance < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(t.balance)}</div>
+      ${linea(textoBalance(ta.balance, tp.balance))}</div>`;
+  const compararTxt = compara
+    ? 'Comparado con ' + cmp.leyenda + (cmp.parejo ? ' — los mismos días, para que sea parejo.' : '.')
+    : (t.hayDatos ? 'Todavía no hay un periodo anterior con qué comparar.' : '');
+  // Red de seguridad para datos importados: hoy, vía la app, todo pedido nace con fecha.
+  // Si algún día entra uno sin ninguna (Excel de Microsip, migración...), que no
+  // desaparezca en silencio de "vendiste": se avisa.
+  const sinFecha = estado.pedidos.filter(p => p.estado !== 'cancelado' && !fechaAltaDe(p));
+  $('res-comparado').innerHTML = esc(compararTxt) + (sinFecha.length
+    ? `<br>${sinFecha.length} pedido${sinFecha.length===1?'':'s'} sin fecha de alta no se cuenta${sinFecha.length===1?'':'n'} en "vendiste".`
+    : '');
 
-  // gastos por categoría, con barras a escala del mayor
-  const porCat = new Map();
-  gastos.forEach(g => porCat.set(g.categoria || 'otro',
-    (porCat.get(g.categoria || 'otro') || 0) + (g.montoCent || 0)));
-  const cats = [...porCat].sort((a,b) => b[1] - a[1]);
-  const topCat = cats.length ? cats[0][1] : 1;
+  // El pastel: por nombre de material cuando lo hay, por categoría cuando no. Las
+  // barras de abajo conservan el desglose completo, que es la lectura precisa.
+  const lista = gastosParaPastel(t.gastos, estado.materiales);
+  const rebs  = rebanadas(lista);
+  const arcos = arcosDonut(rebs);
+  const color = i => COLORES_DONUT[i % COLORES_DONUT.length];
+  const topCat = lista.length ? lista[0].monto : 1;
+  const otros = rebs.find(x => x.incluye);
 
   // qué piezas se pidieron en el periodo
   const piezas = new Map();
-  vendidos.forEach(p => (p.renglones||[]).forEach(rr =>
+  t.vendidos.forEach(p => (p.renglones||[]).forEach(rr =>
     piezas.set(rr.nombre || 'pieza', (piezas.get(rr.nombre || 'pieza') || 0) + (rr.cantidad || 0))));
   const topPiezas = [...piezas].sort((a,b) => b[1] - a[1]).slice(0, 6);
 
-  const porCuenta = new Map();
-  cobros.forEach(c => porCuenta.set(c.cuenta || 'sin especificar',
-    (porCuenta.get(c.cuenta || 'sin especificar') || 0) +
-    (c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0))));
+  const porCuenta = porCuentaDe(t.cobros);
 
   const porCobrar = estado.pedidos.filter(p => p.estado !== 'cancelado')
     .map(p => ({p, saldo: saldoDe(p)})).filter(x => x.saldo > 0);
@@ -971,13 +1277,32 @@ function pintarResumen() {
   $('res-cuerpo').innerHTML = `
     <div class="rejilla dos">
       <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">En qué se fue el gasto</h3>
-        ${cats.length ? cats.map(([cat, monto]) => `
+        ${!lista.length ? `<p class="vacio">Sin gastos en ${esc(r.titulo)}.</p>` : `
+        <div class="donut-caja">
+          <svg class="donut" viewBox="0 0 120 120" role="img" aria-label="gastos por categoría">
+            <circle class="fondo" cx="60" cy="60" r="50"/>
+            ${arcos.map((a,i) => a.circulo
+              ? `<circle class="reb" cx="60" cy="60" r="50" stroke="${color(i)}" data-i="${i}"/>`
+              : `<path class="reb" d="${a.d}" stroke="${color(i)}" data-i="${i}"/>`).join('')}
+            <text class="total" x="60" y="58" id="donut-total"></text>
+            <text class="sub-donut" x="60" y="72" id="donut-sub"></text>
+          </svg>
+          <ul class="leyenda">${rebs.map((x,i) => `
+            <li><button type="button" data-i="${i}" aria-pressed="${donutSel === x.nombre}"
+                aria-label="${esc(x.nombre)}, ${Math.round(x.pct)}%, ${dinero(x.monto)}">
+              <span class="pto" style="background:${color(i)}"></span>
+              <span class="nom">${esc(x.nombre)}</span>
+              <span class="pct">${Math.round(x.pct)}%</span>
+              <span class="monto">${dinero(x.monto)}</span></button></li>`).join('')}</ul>
+        </div>
+        ${otros ? `<p class="nota" style="margin:6px 0 10px">"otros" junta lo que pesa menos del 3%: ${esc(otros.incluye.join(', '))}.</p>` : ''}
+        <div style="margin-top:12px;border-top:1px solid var(--arena);padding-top:10px">
+        ${lista.map(x => `
           <div style="margin-bottom:10px">
             <div style="display:flex;justify-content:space-between;font-size:13.5px">
-              <span>${esc(cat)}</span><span class="monto">${dinero(monto)}</span></div>
-            <div class="barra-fondo"><div class="barra-relleno" style="width:${(monto/topCat*100).toFixed(1)}%"></div></div>
-          </div>`).join('')
-        : `<p class="vacio">Sin gastos en ${esc(r.titulo)}.</p>`}</div>
+              <span>${esc(x.nombre)}</span><span class="monto">${dinero(x.monto)}</span></div>
+            <div class="barra-fondo"><div class="barra-relleno" style="width:${(x.monto/topCat*100).toFixed(1)}%"></div></div>
+          </div>`).join('')}</div>`}</div>
       <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">Qué te pidieron</h3>
         ${topPiezas.length ? `<ul class="lista">` + topPiezas.map(([nom, cant]) =>
           `<li class="reng"><div class="reng-cuerpo">${esc(nom)}</div>
@@ -994,6 +1319,38 @@ function pintarResumen() {
           ? porCobrar.length + ' pedido' + (porCobrar.length===1?'':'s') + ' por cobrar — el detalle está en <b>cuentas</b>. No es del periodo: es TODO lo que te deben hoy.'
           : 'Nadie te debe nada. Así se cierra bonito.'}</p></div>
     </div>`;
+
+  // Tocar una rebanada (o su renglón de la leyenda) pone su nombre y monto en el centro;
+  // tocarla otra vez regresa al total. El svg se recrea en cada pintado, así que el
+  // listener se cuelga aquí y no se acumula.
+  const svg = $('res-cuerpo').querySelector('.donut');
+  if (svg) {
+    // donutSel guarda el NOMBRE de la rebanada, no su posición: un cambio de periodo o un
+    // snapshot que reordena los gastos movía el índice a otra categoría en silencio. Si
+    // la rebanada ya no existe (se acabó ese gasto), se limpia la selección.
+    const indiceDe = nombre => nombre === null ? null : rebs.findIndex(x => x.nombre === nombre);
+    if (donutSel !== null && indiceDe(donutSel) === -1) donutSel = null;
+    const pinta = nombre => {
+      const i = indiceDe(nombre);
+      $('res-cuerpo').querySelectorAll('[data-i]').forEach(e => {
+        const on = Number(e.dataset.i) === i;
+        e.classList.toggle('sel', on);
+        if (e.tagName === 'BUTTON') e.setAttribute('aria-pressed', on);
+      });
+      const x = i === null || i < 0 ? null : rebs[i];
+      $('donut-total').textContent = fmtCorto(x ? x.monto : t.gastado);
+      $('donut-sub').textContent = x ? x.nombre.slice(0, 16) : 'en total';
+    };
+    pinta(donutSel);
+    const elegir = e => {
+      const el = e.target.closest('[data-i]'); if (!el) return;
+      const nombre = rebs[Number(el.dataset.i)]?.nombre ?? null;
+      donutSel = donutSel === nombre ? null : nombre;
+      pinta(donutSel);
+    };
+    svg.addEventListener('click', elegir);
+    $('res-cuerpo').querySelector('.leyenda').addEventListener('click', elegir);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1818,11 +2175,27 @@ function tarjetaContacto() {
   </div>`;
 }
 
+// Se pinta SOLO la pestaña que se está viendo, y una sola vez por cuadro aunque lleguen
+// los siete snapshots de Firestore en ráfaga. Antes cada snapshot repintaba las siete
+// pantallas: siete veces el trabajo, y cualquier cosa que el usuario tuviera elegida en
+// pantalla —una rebanada del donut— se perdía. irA() vuelve a llamar aquí al cambiar de
+// pestaña, así que la que se abre siempre llega fresca.
+// sitio pinta con AMBAS: pintarSitio() decide si este rol puede editar (y si no, muestra
+// "Solo Gaby y Marcela pueden cambiar la página"); pintarSitioEstado() solo actualiza el
+// aviso de publicado/pendiente. Con solo la segunda, un rol sin permiso podía seguir
+// viendo el editor de una sesión anterior en la misma pestaña.
+const PINTORES = {inicio: pintarInicio, pedidos: pintarPedidos, cobros: pintarCobros,
+                  inventario: pintarInventario, dinero: pintarDinero, equipo: pintarTareas,
+                  resumen: pintarResumen, sitio: () => { pintarSitio(); pintarSitioEstado(); }};
+let pintarProgramado = false;
 function pintarTodo() {
-  if (!estado.usuario) return;
-  pintarInicio(); pintarPedidos(); pintarCobros(); pintarInventario();
-  pintarDinero(); pintarTareas(); pintarResumen();
-  if (paginaActual === 'sitio') pintarSitioEstado();
+  if (!estado.usuario || pintarProgramado) return;
+  pintarProgramado = true;
+  requestAnimationFrame(() => {
+    pintarProgramado = false;
+    if (!estado.usuario) return;
+    (PINTORES[paginaActual] || pintarInicio)();
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1948,6 +2321,13 @@ $('btn-salir').addEventListener('click', async () => {
   desuscribir.forEach(u => { try { u(); } catch(e){} });
   desuscribir = [];
   reiniciarSitio();
+  // Sin esto, la sesión siguiente heredaba la pestaña de la anterior: si Gaby salió en
+  // "mi página" y luego entra Elita (rol 'apoyo'), el menú esconde la pestaña pero el
+  // editor viejo seguía pintado detrás — solo `pintarNav()` corría al volver a entrar.
+  paginaActual = 'inicio';
+  PAGINAS.forEach(p => $('pg-' + p.id).classList.toggle('activa', p.id === 'inicio'));
+  $('sitio-cuerpo').innerHTML = '';
+  $('sitio-estado').innerHTML = '';
   await signOut(auth);
 });
 // Deja el editor de la página como si nadie hubiera entrado. Sin esto, si Marcela
@@ -2191,6 +2571,14 @@ $('res-semana').addEventListener('click', () => { resTipo = 'semana'; resOffset 
 $('res-mes').addEventListener('click', () => { resTipo = 'mes'; resOffset = 0; pintarResumen(); });
 $('res-atras').addEventListener('click', () => { resOffset--; pintarResumen(); });
 $('res-adelante').addEventListener('click', () => { if (resOffset < 0) { resOffset++; pintarResumen(); } });
+
+// ── Controles de movimientos ───────────────────────────────────
+$('mov-semana').addEventListener('click', () => { movTipo = 'semana'; movOffset = 0; pintarDinero(); });
+$('mov-mes').addEventListener('click', () => { movTipo = 'mes'; movOffset = 0; pintarDinero(); });
+$('mov-atras').addEventListener('click', () => { movOffset--; pintarDinero(); });
+$('mov-adelante').addEventListener('click', () => { if (movOffset < 0) { movOffset++; pintarDinero(); } });
+['todos','entro','salio'].forEach(f =>
+  $('mov-f-' + f).addEventListener('click', () => { movFiltro = f; pintarDinero(); }));
 
 // ── Detalle de un pedido ───────────────────────────────────────
 function abrirPedido(id) {
