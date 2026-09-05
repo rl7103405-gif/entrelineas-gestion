@@ -140,3 +140,47 @@ anterior: este mes ganaste 20% más y gastaste 15% más"*. Decisiones que no hay
 **Lo que la junta pidió y NO entró, por la regla de una feature por sesión, está en
 `IDEAS.md`** (ignorado por git: trae detalles del trato). Lo más urgente ahí: capturar el
 **origen del pedido** antes del lunes 7, que es cuando empiezan a usarla.
+
+## El flujo de pagos, endurecido antes del arranque (4-sep-2026, tarde)
+
+Beto pidió *"que los pagos estén bien"* antes del lunes 7. Codex auditó el flujo de punta a
+punta y esto es lo que quedó, para no re-discutirlo:
+
+- **Cada movimiento de dinero e inventario usa su `opId` como id del documento** (`setDoc`,
+  no `addDoc`), y las reglas exigen `opId == id`. El `opId` se genera **al abrir el diálogo**,
+  no al tocar el botón: si el primer intento sí llegó y la respuesta se perdió, el reintento
+  choca con el primero y `escribirIdempotente()` lo reconoce como "ya estaba". Nunca hay dos.
+- **La única corrección de un pago es revertirlo completo, una vez.** Botón *corregir* en el
+  detalle del pedido; el documento se llama `rev-<idDelPago>` y las reglas exigen que
+  coincida en pedido, monto y cuenta con el original (`reversionValida`). Nada de
+  reversiones parciales: se revierte y se registra el pago bueno. La reversión lleva la
+  fecha de hoy, no la del pago.
+- **El folio es el id del pedido**, creado dentro de `runTransaction`: dos personas pegando
+  el mismo WhatsApp a la vez no pueden duplicarlo. Las reglas exigen `folio == id`.
+- **`totalCent` y `renglones` son inmutables en las reglas.** Codex lo ganó con un caso: pedido
+  de $1,500 con $500 pagados, alguien baja el total a $500 y el pedido desaparece de "cuentas"
+  con $1,000 sin cobrar. Si un precio se capturó mal: cancelar, volver a capturar, corregir el
+  pago y registrarlo en el nuevo. Un "corregir precio" con auditoría está en `IDEAS.md`.
+- **Compra de material + su gasto van en un `writeBatch`** con ids `op` y `op-g`. Antes eran
+  dos escrituras y la segunda podía fallar sola. El gasto exige cuenta (las reglas también).
+- **Las cuentas de cobro son un catálogo** en `config/cuentas` que edita la dueña (botón en
+  "cuentas"), con default Nu · Gaby, Banbajío · Marce y efectivo — lo que dijeron en la
+  junta. Antes el selector ofrecía los NOMBRES de los miembros, que no son cuentas. El pago
+  guarda el nombre tal cual: renombrar una cuenta no toca el historial.
+- **Gastos: `update` cerrado, `delete` solo dueña y con lápida** en `gastosBorrados` (misma
+  tanda atómica). No son libro inmutable por decisión ya escrita arriba, pero borrar sin
+  rastro descuadraba cierres ya vistos.
+- **La interfaz espeja los roles** (`operaDinero()`, `esDuena()` del cliente): Elita no ve
+  "registrar pago", "+ gasto", "corregir" ni el costo de una compra. No es seguridad —eso son
+  las reglas—, es no enseñar un botón que va a fallar.
+- **Origen del pedido** (`origen`: instagram · anuncio · recomendacion · pagina · repite ·
+  otro) en el alta, prellenado con "la página web" cuando viene pegado, y una tarjeta "De
+  dónde llegaron" en el resumen. Es lo que Marcela pidió para saber si el anuncio se paga.
+- Barato pero real: "cargando" ya no se ve como "no hay nada"; `pintarTodo()` atrapa un dato
+  corrupto y lo dice en pantalla; al volver la señal se reengancha `escuchar()`; `.btn` con
+  `min-height:44px`.
+
+**Riesgos aceptados a conciencia:** el reintento tras recargar la página no es idempotente
+(el `opId` se pierde con la recarga); `fechaValida` de las reglas deja pasar el 31 de febrero
+(la app lo frena); las credenciales de `verificar-reglas.mjs` viven en claro en el disco de
+Beto (gitignored) — Codex sugiere rotarlas; es decisión suya.

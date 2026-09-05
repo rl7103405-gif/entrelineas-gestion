@@ -457,6 +457,52 @@ console.log('\n18. El tope de movimientos nunca parte un día a la mitad');
   chk('si todo cabe, no se oculta nada', r4.dias.length === 2 && r4.ocultos === 0);
 }
 
+// ═══════════ 19. LAS REGLAS Y LA APP DEBEN DECIR CASI LO MISMO ═══════════
+console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), salvo el hueco documentado');
+{
+  const t = api(nuevoEstado());
+  // Copia EXACTA del regex de fechaValida() en gestion/firestore.rules. Si alguien cambia
+  // uno de los dos sin el otro, esta prueba se rompe.
+  const REGEX_REGLAS = /^[0-9]{4}-((0[13578]|1[02])-(0[1-9]|[12][0-9]|3[01])|(0[469]|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-9]))$/;
+  // 17 casos con el mes y el día en rango: las reglas y la app tienen que coincidir en
+  // TODOS estos, porque ninguno depende de si el año es bisiesto.
+  const casos = [
+    ['2026-01-31', true],    // enero tiene 31
+    ['2026-03-31', true],    // marzo tiene 31
+    ['2026-05-31', true],    // mayo tiene 31
+    ['2026-07-31', true],    // julio tiene 31
+    ['2026-08-31', true],    // agosto tiene 31
+    ['2026-10-31', true],    // octubre tiene 31
+    ['2026-04-30', true],    // abril tiene 30
+    ['2026-04-31', false],   // abril NO tiene 31 — el caso que motivó R2
+    ['2026-06-30', true],    // junio tiene 30
+    ['2026-06-31', false],   // junio NO tiene 31
+    ['2026-09-30', true],    // septiembre tiene 30
+    ['2026-09-31', false],   // septiembre NO tiene 31
+    ['2026-11-30', true],    // noviembre tiene 30
+    ['2026-11-31', false],   // noviembre NO tiene 31
+    ['2026-02-28', true],    // febrero, año no bisiesto
+    ['2026-02-30', false],   // 30 de febrero: nunca existe
+    ['2026-02-31', false],   // 31 de febrero: el caso original que motivó fechaValida()
+  ];
+  chk('son 17 casos', casos.length === 17);
+  casos.forEach(([f, esperado]) => {
+    chk('regex de las reglas — ' + f, REGEX_REGLAS.test(f) === esperado,
+        'esperaba ' + esperado + ', dio ' + REGEX_REGLAS.test(f));
+    chk('esFechaValida — ' + f, t.esFechaValida(f) === esperado,
+        'esperaba ' + esperado + ', dio ' + t.esFechaValida(f));
+  });
+  // El único desacuerdo PERMITIDO: 29 de febrero de un año NO bisiesto. El regex de las
+  // reglas no sabe calcular bisiestos (documentado en firestore.rules y en CLAUDE.md) y lo
+  // deja pasar; esFechaValida() sí reconstruye la fecha y lo rechaza. Si cualquiera de las
+  // dos líneas de abajo cambia de resultado, hay que revisar que siga siendo el ÚNICO hueco.
+  chk('29 feb no bisiesto: las reglas SÍ lo dejan pasar (hueco documentado)',
+      REGEX_REGLAS.test('2026-02-29') === true);
+  chk('29 feb no bisiesto: la app SÍ lo rechaza', t.esFechaValida('2026-02-29') === false);
+  chk('29 feb bisiesto: las dos coinciden en aceptarlo',
+      REGEX_REGLAS.test('2024-02-29') === true && t.esFechaValida('2024-02-29') === true);
+}
+
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total
                                  : fallos + ' FALLAS de ' + total));
 process.exit(fallos ? 1 : 0);

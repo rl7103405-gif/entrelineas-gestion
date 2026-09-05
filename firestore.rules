@@ -57,8 +57,21 @@ service cloud.firestore {
       function montoValido(c) {
         return c is int && c > 0 && c < 100000000;   // hasta $1,000,000, en centavos
       }
+      // Días válidos SEGÚN EL MES (rechaza 31 de febrero, 31 de abril, 30 de febrero). No es
+      // un calendario completo: deja pasar el 29 de febrero de un año NO bisiesto, porque
+      // estas reglas no saben calcular bisiestos — eso sí lo frena la app (esFechaValida()).
+      // Probado contra 17 casos en test-logica.mjs, con ese único desacuerdo documentado.
       function fechaValida(f) {
-        return f is string && f.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+        return f is string && f.matches('^[0-9]{4}-((0[13578]|1[02])-(0[1-9]|[12][0-9]|3[01])|(0[469]|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-9]))$');
+      }
+      // Todo movimiento de dinero e inventario usa su opId como id del documento. Es lo que
+      // vuelve idempotente un reintento: el mismo intento no puede crear dos documentos,
+      // porque el segundo choca con el primero (y update está cerrado).
+      function idempotente(id) {
+        return request.resource.data.opId == id;
+      }
+      function cuentaValida(c) {
+        return c is string && c.size() > 0 && c.size() <= 60;
       }
       // quien registra un movimiento de dinero no puede firmarlo como otra persona
       function firmadoPorMi(campo) {
@@ -78,15 +91,32 @@ service cloud.firestore {
       // ── pedidos y clientes: los tres capturan ─────────────────
       match /pedidos/{id} {
         allow read:   if esMiembro();
+        // El folio ES el id del documento: así dos personas pegando el mismo mensaje de
+        // WhatsApp a la vez no pueden crear dos pedidos con el mismo folio — el segundo
+        // create choca con el primero. Sin '/' ni rarezas: es un id de Firestore.
         allow create: if esMiembro()
                       && request.resource.data.folio is string
+                      && request.resource.data.folio == id
+                      && id.matches('^[A-Za-z0-9-]{4,40}$')
                       && request.resource.data.totalCent is int
                       && request.resource.data.totalCent >= 0
-                      && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado'];
+                      && request.resource.data.totalCent < 100000000   // mismo tope que montoValido()
+                      && request.resource.data.renglones is list
+                      && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado']
+                      && request.resource.data.get('origen', '') is string
+                      && request.resource.data.get('origen', '').size() <= 20;
+        // Lo que vale el pedido NO se toca después de creado. Caso concreto (Codex,
+        // 4-sep-2026): pedido de $1,500 con $500 pagados; alguien baja el total a $500 y
+        // el pedido desaparece de "cuentas" con $1,000 sin cobrar y sin que nada lo
+        // muestre. Si un precio se capturó mal, hoy el camino es cancelar y volver a
+        // capturar; un "corregir precio" con auditoría está en IDEAS.md.
         allow update: if esMiembro()
                       && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado']
                       // el folio identifica al pedido en voz alta y en papel: no se renombra
-                      && request.resource.data.folio == resource.data.folio;
+                      && request.resource.data.folio == resource.data.folio
+                      && request.resource.data.totalCent == resource.data.totalCent
+                      && request.resource.data.renglones == resource.data.renglones
+                      && request.resource.data.get('origen', '') == resource.data.get('origen', '');
         // un pedido no se borra: se cancela, para que su historial de cobros siga
         // explicando el dinero que ya entró
         allow delete: if false;
@@ -97,14 +127,51 @@ service cloud.firestore {
       }
 
       // ── LIBRO DE COBROS: inmutable ────────────────────────────
+      // Un pago siempre apunta a un pedido que existe y dice en qué cuenta cayó.
+      function pedidoExiste(pid) {
+        return pid is string
+          && exists(/databases/$(database)/documents/negocios/$(negocio)/pedidos/$(pid));
+      }
+      // La única corrección posible es revertir un pago COMPLETO, una sola vez: el id de la
+      // reversión es 'rev-' + el id del pago, así que no puede haber dos. Debe coincidir
+      // en pedido, monto y cuenta con el original. Para corregir $100 que eran $80, se
+      // revierte $100 y se registra un pago nuevo de $80: más simple y más auditable que
+      // una reversión parcial. La cuenta se valida contra el ORIGINAL, no contra el
+      // catálogo: una cuenta que ya se archivó tiene que poder revertirse igual.
+      // Separada de reversionValida() para poder cortar ANTES de pedir el original: el &&
+      // de reversionValida comprueba `refCobroId is string` primero, y solo si eso pasa
+      // llama a esta función (por eso está declarada antes, no después). Con un payload
+      // malformado no vale la pena gastar una lectura de Firestore que de todos modos se
+      // va a rechazar.
+      function reversionCoincideConOriginal(id, d) {
+        let orig = get(/databases/$(database)/documents/negocios/$(negocio)/cobros/$(d.refCobroId));
+        return id == 'rev-' + d.refCobroId
+          && orig.data.tipo == 'pago'
+          && orig.data.pedidoId == d.pedidoId
+          && orig.data.montoCent == d.montoCent
+          && orig.data.cuenta == d.cuenta;
+      }
+      function reversionValida(id) {
+        let d = request.resource.data;
+        return d.refCobroId is string && reversionCoincideConOriginal(id, d);
+      }
       match /cobros/{id} {
         allow read:   if esMiembro();
+        // El prefijo 'rev-' está RESERVADO para reversiones. Antes un PAGO con id 'rev-X'
+        // pasaba la condición final con solo `tipo == 'pago'`, y ese documento bloqueaba
+        // para siempre la reversión legítima del pago X (el create de la reversión choca
+        // contra ese pago, y update está cerrado). Ahora un pago con id 'rev-*' se rechaza
+        // y una reversión tiene que, además, pasar reversionValida().
         allow create: if operaDinero()
-                      && request.resource.data.pedidoId is string
+                      && idempotente(id)
+                      && pedidoExiste(request.resource.data.pedidoId)
                       && request.resource.data.tipo in ['pago','reversion']
                       && montoValido(request.resource.data.montoCent)
+                      && cuentaValida(request.resource.data.cuenta)
                       && fechaValida(request.resource.data.fecha)
-                      && firmadoPorMi('registradoPor');
+                      && firmadoPorMi('registradoPor')
+                      && ( (request.resource.data.tipo == 'pago' && !id.matches('^rev-.*'))
+                        || (request.resource.data.tipo == 'reversion' && reversionValida(id)) );
         allow update, delete: if false;   // se corrige con una reversión, no editando
       }
 
@@ -112,6 +179,7 @@ service cloud.firestore {
       match /invMovs/{id} {
         allow read:   if esMiembro();
         allow create: if esMiembro()
+                      && idempotente(id)
                       && request.resource.data.materialId is string
                       && request.resource.data.tipo in ['compra','consumo','ajuste']
                       && request.resource.data.cantidad is number
@@ -131,12 +199,41 @@ service cloud.firestore {
       match /gastos/{id} {
         allow read:   if esMiembro();
         allow create: if operaDinero()
+                      && idempotente(id)
                       && request.resource.data.concepto is string
                       && montoValido(request.resource.data.montoCent)
+                      && cuentaValida(request.resource.data.cuenta)
                       && fechaValida(request.resource.data.fecha)
                       && firmadoPorMi('quien');
-        allow update: if operaDinero();
-        allow delete: if esDuena();
+        // Los gastos NO son libro inmutable (decisión del CLAUDE.md: solo cobros e
+        // invMovs lo son). Pero editar tampoco: la app nunca actualiza un gasto, así que
+        // esa puerta estaba abierta sin que nadie la usara. El camino de corrección es
+        // que la dueña lo borre, y la app deja constancia en /gastosBorrados antes.
+        // La lápida tiene que ir en LA MISMA tanda que el borrado: existsAfter() exige que,
+        // al terminar el batch, ya exista su gastosBorrados/{id}. Sin esto alguien podía
+        // borrar un gasto sin dejar rastro, escribiendo por SDK en vez de por la app.
+        // (La pareja compra↔gasto de invMovs/gastos NO se exige así a propósito: una regla
+        // mal escrita ahí bloquearía las capturas de inventario del lunes 7. Riesgo
+        // aceptado a conciencia, ya está en CLAUDE.md.)
+        allow update: if false;
+        allow delete: if esDuena()
+                      && existsAfter(/databases/$(database)/documents/negocios/$(negocio)/gastosBorrados/$(id));
+      }
+      // La lápida de un gasto borrado: qué era, cuánto, de qué fecha y quién lo borró.
+      // Borrar un gasto de $500 después del cierre baja "gastaste" $500 aunque el banco no
+      // cambió; esto es lo que permite explicar la diferencia después. Solo se crea.
+      match /gastosBorrados/{id} {
+        allow read:   if esMiembro();
+        // Sin lápida no hay borrado: existsAfter() en 'gastos' es false una vez que el
+        // batch borra ese documento, así que esta condición exige que el delete vaya en la
+        // misma tanda (una lápida suelta, sin su borrado, no tiene sentido).
+        allow create: if esDuena()
+                      && request.resource.data.gastoId is string
+                      && request.resource.data.concepto is string
+                      && request.resource.data.montoCent is int
+                      && firmadoPorMi('borradoPor')
+                      && !existsAfter(/databases/$(database)/documents/negocios/$(negocio)/gastos/$(id));
+        allow update, delete: if false;
       }
 
       // ── pendientes ────────────────────────────────────────────
@@ -149,7 +246,16 @@ service cloud.firestore {
       // ── configuración del negocio ─────────────────────────────
       match /config/{doc} {
         allow read: if esMiembro();
-        allow write: if esDuena();
+        // El catálogo de cuentas de cobro tiene forma esperada: una lista de 1 a 12
+        // cuentas. El largo de CADA cuenta (60 bytes) no se puede exigir aquí — las reglas
+        // no saben recorrer los elementos de una lista — así que eso lo recorta el cliente
+        // (cortarBytes()) antes de guardar; esto solo pone un techo al tamaño de la lista.
+        allow create, update: if esDuena()
+                              && (doc != 'cuentas'
+                                  || (request.resource.data.lista is list
+                                      && request.resource.data.lista.size() >= 1
+                                      && request.resource.data.lista.size() <= 12));
+        allow delete: if esDuena();
       }
 
       // ══ LA PÁGINA PÚBLICA ═════════════════════════════════════

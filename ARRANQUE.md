@@ -13,6 +13,7 @@
 | Documentos de miembro | ⏳ ver abajo |
 | Repo y GitHub Pages | ✅ publicado (ver abajo) |
 | Reglas del editor de la página (`sitio`, `sitioFotos`) | ✅ desplegadas el 31-ago-2026 |
+| Reglas del flujo de pagos (idempotencia, reversión, folio como id, lápidas) | ✅ desplegadas el 4-sep-2026 |
 
 > ⚠️ **El deploy se corre desde `gestion/`, no desde la raíz.** `firebase.json`
 > vive en esa carpeta; desde `Desktop\ENTRELINEAS` el CLI contesta

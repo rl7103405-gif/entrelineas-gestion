@@ -76,8 +76,10 @@ label{display:block;font-size:12.5px;font-weight:500;color:var(--tinta-suave);ma
 @media(min-width:720px){.rejilla.dos{grid-template-columns:1fr 1fr}
   .rejilla.tres{grid-template-columns:repeat(3,1fr)}}
 
+/* min-height explícito: el padding suele dar 44px, pero "suele" no es garantía táctil */
 .btn{background:var(--rosa-fuerte);color:var(--blanco);border:0;border-radius:999px;
-  padding:11px 20px;font-weight:500}
+  padding:11px 20px;font-weight:500;min-height:44px}
+.btn.chico{min-height:0}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.suave{background:var(--rosa-claro);color:var(--rosa-hondo)}
 .btn.linea{background:none;border:1px solid var(--rosa-borde);color:var(--rosa-hondo)}
@@ -254,6 +256,7 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
       <div class="titulo">
         <div><h2>Cuentas por cobrar</h2>
           <p class="sub">lo que falta que te paguen, de lo más viejo a lo más nuevo</p></div>
+        <button class="btn linea chico" id="btn-cuentas" hidden>cuentas de cobro</button>
       </div>
       <div class="rejilla tres" id="resumen-cobros" style="margin-bottom:16px"></div>
       <div id="lista-cobros"></div>
@@ -491,6 +494,11 @@ const DIAS_PAQUETERIA = 3;
 const ESTADOS = ['nuevo','proceso','listo','entregado','cancelado'];
 const ABIERTOS = ['nuevo','proceso','listo'];
 const ROLES = {duena:'dueña', socia:'socia', apoyo:'apoyo'};
+// De dónde llegó el pedido. Marcela (junta del 2-sep-2026): "agregar un apartado que sea
+// que lo pidieron a través de la publicidad, para ver qué tal" — meten dinero en anuncios
+// y no saben si regresa. Códigos estables; las etiquetas pueden cambiar.
+const ORIGENES = {instagram:'Instagram', anuncio:'anuncio pagado', recomendacion:'me recomendaron',
+                  pagina:'la página web', repite:'clienta que repite', otro:'otro / no sé'};
 
 const estado = {
   usuario: null, miembro: null,
@@ -862,7 +870,7 @@ function movimientosDe(estado, desde, hasta) {
                meta: [c.cuenta || '', p && p.folio ? p.folio : ''].filter(Boolean).join(' · ') };
     }),
     ...estado.gastos.filter(g => en(g.fecha)).map(g => ({
-      fecha: g.fecha, grupo: 'salio', monto: g.montoCent || 0,
+      fecha: g.fecha, grupo: 'salio', monto: g.montoCent || 0, gastoId: g.id,
       titulo: g.concepto || 'gasto', meta: NOMBRE_CATEGORIA[g.categoria] || g.categoria || '' }))
   ].sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
@@ -908,6 +916,11 @@ const PAGINAS = [
   {id:'sitio',      nombre:'mi página', soloEdita:true}
 ];
 const puedeEditarSitio = () => ['duena','socia'].includes(estado.miembro?.rol);
+// Espejo en la interfaz de operaDinero() y esDuena() de las reglas. No es seguridad
+// —eso lo hacen las reglas—: es para no enseñarle a Elita un botón que le va a fallar
+// con un error genérico.
+const operaDinero = () => ['duena','socia'].includes(estado.miembro?.rol);
+const esDuena     = () => estado.miembro?.rol === 'duena';
 const paginasVisibles  = () => PAGINAS.filter(p => !p.soloEdita || puedeEditarSitio());
 let paginaActual = 'inicio';
 function pintarNav() {
@@ -933,6 +946,14 @@ function irA(id) {
 function pintarPedidos() {
   const cola = pedidosOrdenados();
   const cont = $('cola-pedidos');
+  // "Cargando" y "vacío" son cosas distintas: antes, mientras llegaba el primer snapshot,
+  // la pantalla decía "no hay pedidos" y eso es mentira durante unos segundos. También
+  // espera a 'cobros': si los pedidos ya llegaron pero los cobros no, saldoDe() ve el
+  // pedido sin ningún pago y deja "pagar de más" antes de que se sepa lo que ya entró.
+  if (!estado.cargado.pedidos || !estado.cargado.cobros) {
+    cont.innerHTML = `<div class="tarjeta"><p class="vacio">Cargando tus pedidos…</p></div>`;
+    return;
+  }
   if (!cola.length) {
     cont.innerHTML = `<div class="tarjeta"><p class="vacio">Todavía no hay pedidos abiertos.<br>
       Toca <b>+ pedido</b> para capturar el primero.</p></div>`;
@@ -985,6 +1006,12 @@ function pintarPedidos() {
 
 // ── Cuentas por cobrar ─────────────────────────────────────────
 function pintarCobros() {
+  $('btn-cuentas').hidden = !esDuena();
+  if (!estado.cargado.pedidos || !estado.cargado.cobros) {
+    $('resumen-cobros').innerHTML = '';
+    $('lista-cobros').innerHTML = `<div class="tarjeta"><p class="vacio">Cargando tus cuentas…</p></div>`;
+    return;
+  }
   const conSaldo = estado.pedidos
     .filter(p => p.estado !== 'cancelado')
     .map(p => ({p, saldo: saldoDe(p)}))
@@ -1015,8 +1042,9 @@ function pintarCobros() {
           </div>
           <div class="reng-lado">
             <div class="monto ${saldo > 0 ? 'neg' : 'pos'}">${dinero(saldo)}</div>
-            <button class="btn suave chico" style="margin-top:6px"
-              data-cobrar="${esc(p.id)}">registrar pago</button>
+            ${saldo > 0 && operaDinero()
+              ? `<button class="btn suave chico" style="margin-top:6px" data-cobrar="${esc(p.id)}">registrar pago</button>`
+              : saldo <= 0 ? `<span class="pastilla p-ambar" style="margin-top:6px;display:inline-block">sobrepagado</span>` : ''}
           </div>
         </li>`).join('') + `</ul></div>`;
   $('lista-cobros').querySelectorAll('[data-cobrar]').forEach(b =>
@@ -1074,6 +1102,9 @@ const fechaLarga = f => esFechaValida(f)
 const conSigno = c => (c < 0 ? '−' : '+') + dinero(Math.abs(c));
 
 function pintarDinero() {
+  // Elita ('apoyo') no registra gastos: el botón espeja la regla, no la reemplaza (las
+  // reglas de Firestore ya lo bloquean aunque alguien lo forzara por consola).
+  $('btn-nuevo-gasto').hidden = !operaDinero();
   const r = rangoPeriodo(movTipo, movOffset);
   $('mov-titulo').textContent = r.titulo;
   $('mov-semana').setAttribute('aria-pressed', movTipo === 'semana');
@@ -1126,9 +1157,15 @@ function pintarDinero() {
       <ul class="lista">${d.movs.map(m => `<li class="reng">
         <div class="reng-cuerpo"><div class="reng-tit">${esc(m.titulo)}</div>
           ${m.meta ? `<div class="reng-meta">${esc(m.meta)}</div>` : ''}</div>
-        <div class="reng-lado monto ${m.grupo === 'entro' && m.monto >= 0 ? 'pos' : 'neg'}">
-          ${m.grupo === 'salio' ? '−' + dinero(Math.abs(m.monto)) : conSigno(m.monto)}</div>
+        <div class="reng-lado">
+          <div class="monto ${m.grupo === 'entro' && m.monto >= 0 ? 'pos' : 'neg'}">
+            ${m.grupo === 'salio' ? '−' + dinero(Math.abs(m.monto)) : conSigno(m.monto)}</div>
+          ${m.gastoId && esDuena()
+            ? `<button type="button" class="btn linea chico" data-borrar-gasto="${esc(m.gastoId)}" style="margin-top:4px;padding:2px 10px;font-size:12px">borrar</button>` : ''}
+        </div>
       </li>`).join('')}</ul>`).join('');
+  $('historial-dinero').querySelectorAll('[data-borrar-gasto]').forEach(b =>
+    b.addEventListener('click', () => dialogoBorrarGasto(b.dataset.borrarGasto)));
 }
 
 // ── Pendientes ─────────────────────────────────────────────────
@@ -1268,6 +1305,15 @@ function pintarResumen() {
     piezas.set(rr.nombre || 'pieza', (piezas.get(rr.nombre || 'pieza') || 0) + (rr.cantidad || 0))));
   const topPiezas = [...piezas].sort((a,b) => b[1] - a[1]).slice(0, 6);
 
+  // por dónde llegó cada venta del periodo: pedidos y dinero por origen
+  const origenes = new Map();
+  t.vendidos.forEach(p => {
+    const k = ORIGENES[p.origen] ? p.origen : 'otro';
+    const x = origenes.get(k) || {n: 0, monto: 0};
+    x.n++; x.monto += (p.totalCent || 0); origenes.set(k, x);
+  });
+  const porOrigen = [...origenes].sort((a,b) => b[1].monto - a[1].monto);
+
   const porCuenta = porCuentaDe(t.cobros);
 
   const porCobrar = estado.pedidos.filter(p => p.estado !== 'cancelado')
@@ -1307,6 +1353,13 @@ function pintarResumen() {
         ${topPiezas.length ? `<ul class="lista">` + topPiezas.map(([nom, cant]) =>
           `<li class="reng"><div class="reng-cuerpo">${esc(nom)}</div>
             <div class="reng-lado monto">${cant}</div></li>`).join('') + `</ul>`
+        : `<p class="vacio">Sin pedidos nuevos en ${esc(r.titulo)}.</p>`}</div>
+      <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">De dónde llegaron</h3>
+        ${porOrigen.length ? `<ul class="lista">` + porOrigen.map(([k, x]) =>
+          `<li class="reng"><div class="reng-cuerpo"><div class="reng-tit">${esc(ORIGENES[k] || k)}</div>
+            <div class="reng-meta">${x.n} pedido${x.n === 1 ? '' : 's'}</div></div>
+            <div class="reng-lado monto">${dinero(x.monto)}</div></li>`).join('') + `</ul>
+          <p class="nota" style="margin-top:8px">Lo que Marcela pidió: si el anuncio se pagó solo, aquí se ve.</p>`
         : `<p class="vacio">Sin pedidos nuevos en ${esc(r.titulo)}.</p>`}</div>
       <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">A qué cuenta entró</h3>
         ${porCuenta.size ? `<ul class="lista">` + [...porCuenta].map(([k,v]) =>
@@ -2169,7 +2222,7 @@ function tarjetaContacto() {
   return `<div class="campo" style="border-top:1px solid var(--arena);padding-top:12px">
     <label for="ed-whatsapp">Número de WhatsApp de la página</label>
     <input type="text" id="ed-whatsapp" inputmode="numeric" value="${esc(sitio.whatsapp)}"
-      placeholder="522221082115 — 52 + lada + número">
+      placeholder="522223835447 — 52 + lada + número">
     <p class="nota" id="ed-whatsapp-prev">${textoPrevisualizacionWa(sitio.whatsapp)}</p>
     <p class="nota">Cambia los tres botones de WhatsApp de un jalón.</p>
   </div>`;
@@ -2194,7 +2247,18 @@ function pintarTodo() {
   requestAnimationFrame(() => {
     pintarProgramado = false;
     if (!estado.usuario) return;
-    (PINTORES[paginaActual] || pintarInicio)();
+    // Un solo documento corrupto no debe dejar la pantalla a medias y en silencio: se
+    // avisa en pantalla, que nadie en el taller abre la consola.
+    try { (PINTORES[paginaActual] || pintarInicio)(); }
+    catch (e) {
+      console.error('pintar ' + paginaActual, e);
+      const pg = $('pg-' + paginaActual);
+      if (pg && !pg.querySelector('.aviso-pintado')) {
+        pg.insertAdjacentHTML('afterbegin',
+          `<div class="aviso mal aviso-pintado">Algo falló al mostrar esta pantalla. Recarga la página;
+           si sigue, mándale a Beto una captura de la consola (F12).</div>`);
+      }
+    }
   });
 }
 
@@ -2320,6 +2384,13 @@ async function entrar() {
 $('btn-salir').addEventListener('click', async () => {
   desuscribir.forEach(u => { try { u(); } catch(e){} });
   desuscribir = [];
+  // Sin este reinicio, la siguiente persona que entrara en el mismo teléfono veía por un
+  // instante los pedidos, cobros y cuentas de quien acaba de salir: los snapshots viejos
+  // se quedaban en memoria y 'cargado' seguía en true hasta que llegara el primero nuevo.
+  estado.cargado = {};
+  estado.pedidos = []; estado.cobros = []; estado.materiales = []; estado.invMovs = [];
+  estado.gastos = []; estado.tareas = []; estado.miembros = [];
+  estado.catalogo.cuentas = [];
   reiniciarSitio();
   // Sin esto, la sesión siguiente heredaba la pestaña de la anterior: si Gaby salió en
   // "mi página" y luego entra Elita (rol 'apoyo'), el menú esconde la pestaña pero el
@@ -2408,15 +2479,27 @@ if (auth) onAuthStateChanged(auth, async u => {
 // ═══════════════════════════════════════════════════════════════
 //  DIÁLOGOS Y CAPTURA
 // ═══════════════════════════════════════════════════════════════
+// Generación del diálogo: si uno viejo sigue esperando red cuando ya se abrió uno nuevo
+// encima, su alGuardar() terminaría cerrando el diálogo NUEVO al responder. Cada apertura
+// sube el contador y el closure de abajo se queda con SU número; solo cierra si nadie
+// abrió otro diálogo mientras tanto.
+let generacionDialogo = 0;
 function abrirDialogo(titulo, html, alGuardar) {
   $('dlg-titulo').textContent = titulo;
   $('dlg-cuerpo').innerHTML = html;
   const d = $('dlg');
+  // El <dialog> es único en la página: si ya estaba abierto, un segundo showModal() lanza
+  // InvalidStateError y el botón data-guardar de este diálogo se queda sin listener.
+  if (d.open) d.close();
   d.showModal();
+  const miGeneracion = ++generacionDialogo;
   const btn = $('dlg-cuerpo').querySelector('[data-guardar]');
   if (btn) btn.addEventListener('click', async () => {
     btn.disabled = true;
-    try { if (await alGuardar() !== false) d.close(); }
+    try {
+      const resultado = await alGuardar();
+      if (resultado !== false && miGeneracion === generacionDialogo) d.close();
+    }
     finally { btn.disabled = false; }
   });
 }
@@ -2443,13 +2526,53 @@ function campoNum(id, etiqueta, extra = '') {
   return `<div class="campo"><label for="${id}">${etiqueta}</label>
     <input type="number" id="${id}" step="0.01" inputmode="decimal" ${extra}></div>`;
 }
-function selectCuentas(id) {
+// Las cuentas reales del negocio, no los nombres de las personas. Salieron en la junta
+// del 2-sep-2026: Nu de Gaby (tope de depósitos de 25,000), Banbajío de Marcela, y
+// efectivo. La BBVA de Gaby se excluye a propósito: con esa paga impuestos y no recibe
+// ventas. Esto es solo el DEFAULT mientras la dueña no guarde su propia lista en
+// config/cuentas; en cuanto la guarde, manda la suya.
+const CUENTAS_DEFAULT = ['Nu · Gaby', 'Banbajío · Marce', 'efectivo'];
+function cuentasDeCobro() {
+  const lista = estado.catalogo.cuentas;
+  return Array.isArray(lista) && lista.length ? lista : CUENTAS_DEFAULT;
+}
+function selectCuentas(id, etiqueta = '¿en qué cuenta entró?') {
   // Gaby: "a veces son en mi tarjeta, a veces son las de Marce". Si no se registra dónde
-  // cayó el dinero, la semana no cuadra nunca.
-  const opciones = estado.miembros.map(m => `<option value="${esc(m.nombre)}">${esc(m.nombre)}</option>`).join('');
-  return `<div class="campo"><label for="${id}">¿en qué cuenta entró?</label>
-    <select id="${id}">${opciones}<option value="efectivo">efectivo</option>
-    <option value="otra">otra</option></select></div>`;
+  // cayó el dinero, la semana no cuadra nunca. Por eso NO hay opción "otra": guardaba la
+  // palabra "otra" como cuenta y el peso quedaba sin dueño. Si falta una cuenta, la dueña
+  // la agrega al catálogo y aparece aquí al instante.
+  const opciones = cuentasDeCobro().map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  return `<div class="campo"><label for="${id}">${esc(etiqueta)}</label>
+    <select id="${id}">${opciones}</select>
+    <p class="nota" style="margin-top:4px">¿Falta una cuenta? La dueña la agrega en <b>cuentas → cuentas de cobro</b>.</p></div>`;
+}
+// El editor del catálogo, solo para la dueña: una cuenta por renglón.
+function dialogoCuentas() {
+  if (!esDuena()) { avisar('Solo la dueña cambia las cuentas'); return; }
+  // Sin esto, si se abre antes de que llegue el primer snapshot de config/cuentas, el
+  // textarea se prellena con CUENTAS_DEFAULT y guardarlo pisa la lista real que todavía
+  // no había llegado.
+  if (!estado.cargado.cuentas) { avisar('Se están cargando las cuentas, intenta en un momento'); return; }
+  abrirDialogo('Cuentas de cobro', `
+    <p class="nota" style="margin-bottom:10px">Una por renglón, como quieras que se lean al
+      registrar un pago. Los pagos ya registrados conservan el nombre con el que se
+      capturaron aunque cambies la lista.</p>
+    <div class="campo"><textarea id="f-cuentas" rows="6">${esc(cuentasDeCobro().join('\n'))}</textarea></div>
+    <button class="btn" data-guardar style="width:100%">guardar cuentas</button>
+  `, async () => {
+    // Primero se recorta a 60 bytes y DESPUÉS se deduplica: al revés, dos nombres que solo
+    // difieren después del byte 60 pasaban como distintos y quedaban repetidos.
+    const renglones = $('f-cuentas').value.split('\n').map(s => cortarBytes(s.trim(), 60)).filter(Boolean);
+    const lista = [...new Set(renglones)];
+    if (!lista.length) { avisar('Deja al menos una cuenta'); return false; }
+    if (lista.length > 12) { avisar('Máximo 12 cuentas; quita ' + (lista.length - 12) + ' para poder guardar'); return false; }
+    try {
+      await setDoc(doc(db, RAIZ + '/config', 'cuentas'), {
+        lista, actualizadoPor: estado.usuario.uid, actualizadoEn: serverTimestamp()
+      });
+      avisar('Cuentas guardadas');
+    } catch (e) { console.error('cuentas', e); avisar(mensajeError(e)); return false; }
+  });
 }
 
 // ── Alta de pedido ─────────────────────────────────────────────
@@ -2491,49 +2614,80 @@ function abrirNuevoPedido(prefill = {}) {
     <p class="nota" style="margin:-4px 0 12px">La fecha que confirmas es la que manda en la
       cola. Si la dejas vacía, el pedido sube hasta arriba como <b>falta confirmar</b>: es a
       propósito, para que no se te pierda sin fecha.</p>
+    <div class="campo"><label for="f-origen">¿cómo llegó este pedido?</label>
+      <select id="f-origen">${Object.entries(ORIGENES).map(([k, v]) =>
+        `<option value="${k}"${k === (prefill.folio ? 'pagina' : 'otro') ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+    <p class="nota" style="margin:-4px 0 12px">Marcela lo pidió para saber si la publicidad se
+      paga sola. En el resumen sale cuánto vendió cada origen.</p>
     <div class="campo"><label for="f-notas">detalles</label>
       <textarea id="f-notas" rows="2" maxlength="500" placeholder="qué debe decir, colores, referencias...">${esc(prefill.ocasion ? 'Ocasión: ' + prefill.ocasion : '')}</textarea></div>
     <button class="btn" data-guardar style="width:100%">guardar pedido</button>
   `, async () => {
     const nombre = $('f-cliente').value.trim();
     const pieza = $('f-pieza').value.trim();
-    const cant = parseInt($('f-cant').value, 10);
+    // parseInt("1.9") da 1 y el pedido se guardaba por una pieza sin avisar de la parte
+    // fraccionaria. Number() + Number.isInteger() sí la detecta.
+    const cant = Number($('f-cant').value);
     const precio = parseFloat($('f-precio').value);
     if (!nombre) { avisar('Ponle el nombre de la clienta'); return false; }
     if (!pieza) { avisar('Escribe qué pieza es'); return false; }
-    if (!Number.isInteger(cant) || cant < 1) { avisar('La cantidad debe ser 1 o más'); return false; }
+    if (!Number.isInteger(cant) || cant < 1) { avisar('La cantidad debe ser un número entero'); return false; }
     if (!Number.isFinite(precio) || precio < 0) { avisar('Escribe el precio por pieza'); return false; }
     const comprometida = $('f-comprometida').value;
     if (comprometida && !esFechaValida(comprometida)) { avisar('La fecha confirmada no es válida'); return false; }
     const entrega = $('f-entrega').value;
     const totalCent = aCent(precio) * cant;
+    // Mismo tope que las reglas: que el aviso salga aquí, claro, y no como un rechazo
+    // genérico del servidor.
+    if (totalCent >= MONTO_MAX_CENT) { avisar('El total pasa de un millón; revisa precio y cantidad'); return false; }
     // el folio de la página se respeta (es el que la clienta tiene en su WhatsApp);
     // pegado dos veces, se rechaza aquí aunque el aviso previo se haya saltado
     if (prefill.folio && estado.pedidos.some(p => p.folio === prefill.folio)) {
       avisar('El pedido ' + prefill.folio + ' ya está registrado'); return false;
     }
+    const origen = ORIGENES[$('f-origen').value] ? $('f-origen').value : 'otro';
+    const folio = prefill.folio || nuevoFolio();
+    if (!/^[A-Za-z0-9-]{4,40}$/.test(folio)) { avisar('El folio trae caracteres raros: ' + folio); return false; }
+    // Todo el DOM se lee AQUÍ, antes de entrar a la transacción, y el id del renglón se
+    // genera una sola vez: Firestore puede reejecutar el callback de runTransaction si
+    // choca con otro escritor, y si adentro se releyera el DOM o se llamara nuevaOp() de
+    // nuevo, cada reintento produciría un renglón u hora distintos para el mismo pedido.
+    const datos = {
+      folio,
+      origen,
+      cliente: {nombre, tel: $('f-tel').value.trim()},
+      // El renglón guarda su propio nombre y precio: si mañana cambia el catálogo, este
+      // pedido sigue diciendo lo que se acordó el día que se tomó.
+      renglones: [{id: nuevaOp(), nombre: pieza, cantidad: cant,
+                   precioUnitCent: aCent(precio), receta: []}],
+      totalCent,
+      estado: 'nuevo',
+      entrega,
+      ciudad: entrega === 'foraneo' ? $('f-ciudad').value.trim() : '',
+      // Son dos fechas distintas a propósito: lo que la clienta pidió no es lo que el
+      // taller prometió, y confundirlas es prometer algo que nadie confirmó.
+      fechaSolicitada: $('f-solicitada').value || hoyISO(),
+      fechaComprometida: comprometida || null,
+      notas: $('f-notas').value.trim(),
+      creadoPor: estado.usuario.uid,
+      creadoEn: serverTimestamp()
+    };
     try {
-      await addDoc(collection(db, RAIZ + '/pedidos'), {
-        folio: prefill.folio || nuevoFolio(),
-        cliente: {nombre, tel: $('f-tel').value.trim()},
-        // El renglón guarda su propio nombre y precio: si mañana cambia el catálogo, este
-        // pedido sigue diciendo lo que se acordó el día que se tomó.
-        renglones: [{id: nuevaOp(), nombre: pieza, cantidad: cant,
-                     precioUnitCent: aCent(precio), receta: []}],
-        totalCent,
-        estado: 'nuevo',
-        entrega,
-        ciudad: entrega === 'foraneo' ? $('f-ciudad').value.trim() : '',
-        // Son dos fechas distintas a propósito: lo que la clienta pidió no es lo que el
-        // taller prometió, y confundirlas es prometer algo que nadie confirmó.
-        fechaSolicitada: $('f-solicitada').value || hoyISO(),
-        fechaComprometida: comprometida || null,
-        notas: $('f-notas').value.trim(),
-        creadoPor: estado.usuario.uid,
-        creadoEn: serverTimestamp()
+      // El folio es el id del documento y se crea dentro de una transacción: si dos
+      // personas pegan el mismo mensaje de WhatsApp a la vez, la segunda ve que ya existe
+      // y no lo duplica. Antes era addDoc con id al azar y la comprobación era en memoria.
+      const ref = doc(db, RAIZ + '/pedidos', folio);
+      await runTransaction(db, async tx => {
+        const ya = await tx.get(ref);
+        if (ya.exists()) throw new Error('folio-duplicado');
+        tx.set(ref, datos);
       });
       avisar('Pedido guardado');
-    } catch (e) { console.error('alta pedido', e); avisar('No se pudo guardar, revisa tu conexión'); return false; }
+    } catch (e) {
+      console.error('alta pedido', e);
+      avisar(e.message === 'folio-duplicado' ? 'El pedido ' + folio + ' ya está registrado' : mensajeError(e));
+      return false;
+    }
   });
 }
 $('btn-nuevo-pedido').addEventListener('click', () => abrirNuevoPedido());
@@ -2566,6 +2720,7 @@ $('btn-pegar-pedido').addEventListener('click', () => {
 
 // ── Controles del resumen ──────────────────────────────────────
 $('btn-publicar').addEventListener('click', publicar);
+$('btn-cuentas').addEventListener('click', dialogoCuentas);
 
 $('res-semana').addEventListener('click', () => { resTipo = 'semana'; resOffset = 0; pintarResumen(); });
 $('res-mes').addEventListener('click', () => { resTipo = 'mes'; resOffset = 0; pintarResumen(); });
@@ -2601,11 +2756,22 @@ function abrirPedido(id) {
     </div>
     ${p.notas ? `<p class="nota" style="margin-bottom:12px">${esc(p.notas)}</p>` : ''}
     ${movs.length ? `<p class="sub" style="margin-bottom:6px">pagos registrados</p>
-      <ul class="lista" style="margin-bottom:12px">` + movs.map(c => `<li class="reng">
+      <ul class="lista" style="margin-bottom:12px">` + movs.map(c => {
+        // hay que exigir que el 'rev-<id>' sea de verdad una reversión: si por cualquier
+        // motivo existiera un pago con ese mismo id, no cuenta como corrección
+        const corregido = c.tipo === 'pago' && movs.some(x => x.id === 'rev-' + c.id && x.tipo === 'reversion');
+        return `<li class="reng">
         <div class="reng-cuerpo">${fechaCorta(c.fecha)} · ${esc(c.cuenta||'')}
-          ${c.tipo === 'reversion' ? '<span class="pastilla p-rojo">corrección</span>' : ''}</div>
-        <div class="reng-lado monto">${c.tipo === 'reversion' ? '−' : ''}${dinero(c.montoCent)}</div>
-      </li>`).join('') + `</ul>` : ''}
+          ${c.tipo === 'reversion' ? '<span class="pastilla p-rojo">corrección</span>' : ''}
+          ${corregido ? '<span class="pastilla p-gris">corregido</span>' : ''}</div>
+        <div class="reng-lado">
+          <div class="monto ${c.tipo === 'reversion' ? 'neg' : ''}">${c.tipo === 'reversion' ? '−' : ''}${dinero(c.montoCent)}</div>
+          ${c.tipo === 'pago' && !corregido && operaDinero()
+            ? `<button type="button" class="btn linea chico" data-corregir="${esc(c.id)}" style="margin-top:4px;padding:3px 10px;font-size:12px">corregir</button>` : ''}
+        </div>
+      </li>`; }).join('') + `</ul>` : ''}
+    ${saldo > 0 && operaDinero()
+      ? `<button type="button" class="btn suave chico" data-pagar style="margin-bottom:12px">registrar un pago</button>` : ''}
     <div class="campo"><label for="f-estado">estado</label>
       <select id="f-estado">${ESTADOS.map(e =>
         `<option value="${e}"${e === p.estado ? ' selected' : ''}>${e}</option>`).join('')}</select></div>
@@ -2624,38 +2790,132 @@ function abrirPedido(id) {
         estado: nuevoEstado, fechaComprometida: nuevaFecha || null
       });
       avisar('Pedido actualizado');
-    } catch (e) { console.error('editar pedido', e); avisar('No se pudo guardar'); return false; }
+    } catch (e) { console.error('editar pedido', e); avisar(mensajeError(e)); return false; }
   });
+  // Los botones de dinero dentro del detalle abren su propio diálogo (cierran este).
+  $('dlg-cuerpo').querySelectorAll('[data-corregir]').forEach(b => b.addEventListener('click', () => {
+    $('dlg').close(); setTimeout(() => dialogoCorregirPago(b.dataset.corregir), 60);
+  }));
+  const pagar = $('dlg-cuerpo').querySelector('[data-pagar]');
+  if (pagar) pagar.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCobro(p.id), 60); });
 }
+
+// ── Escrituras de dinero: idempotentes ─────────────────────────
+// Cada movimiento se escribe con un id FIJO (su opId), generado al abrir el diálogo, no al
+// tocar el botón. Si el primer intento sí llegó al servidor pero la respuesta se perdió y
+// la usuaria vuelve a tocar, el segundo intento choca con el primero (update está cerrado
+// en las reglas) y aquí se reconoce como "ya estaba": nunca hay dos documentos.
+async function escribirIdempotente(ref, datos) {
+  try { await setDoc(ref, datos); return 'creado'; }
+  catch (e) {
+    const s = await getDoc(ref).catch(() => null);
+    if (!s || !s.exists()) throw e;
+    // Que el documento ya exista no basta: hay que confirmar que es EL MISMO intento y no
+    // un choque de id con datos distintos (un opId repetido por error, un bug). Se comparan
+    // solo los campos que identifican la operación, y solo los que datos trae consigo.
+    const previo = s.data();
+    const camposClave = ['tipo', 'pedidoId', 'montoCent', 'opId'];
+    const coincide = camposClave.every(campo => !(campo in datos) || previo[campo] === datos[campo]);
+    if (coincide) return 'ya-estaba';
+    throw new Error('conflicto-id');
+  }
+}
+// Los mismos topes que montoValido() en las reglas, para que el error se vea aquí y no como
+// un "no se pudo" genérico del servidor.
+const MONTO_MAX_CENT = 100000000;
+function montoEnCentavos(texto) {
+  const n = parseFloat(texto);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const c = aCent(n);
+  return c >= 1 && c < MONTO_MAX_CENT ? c : null;
+}
+const mensajeError = e => e?.message === 'conflicto-id'
+  ? 'Ese registro ya existe con otros datos; avísale a Beto'
+  : e?.code === 'permission-denied'
+  ? 'El servidor lo rechazó: revisa que tu cuenta pueda hacer esto y que los datos estén completos'
+  : 'No se pudo guardar, revisa tu conexión';
 
 // ── Registrar un pago ──────────────────────────────────────────
 function dialogoCobro(pedidoId) {
+  // Sin los cobros ya cargados, saldoDe() no sabe lo que ya entró y se podría cobrar de
+  // más sobre un saldo que en realidad ya está pagado.
+  if (!estado.cargado.cobros) { avisar('Espera un momento, se están cargando los pagos'); return; }
   const p = estado.pedidos.find(x => x.id === pedidoId);
   if (!p) return;
+  if (!operaDinero()) { avisar('Los pagos los registran Gaby y Marcela'); return; }
+  if (!estado.cargado.cuentas) { avisar('Se están cargando las cuentas, intenta en un momento'); return; }
   const saldo = saldoDe(p);
+  const opId = nuevaOp();   // uno por intención, no por clic
   abrirDialogo('Registrar pago', `
-    <p class="nota">${esc(p.cliente?.nombre||'')} · ${esc(p.folio)} · debe ${dinero(saldo)}</p>
+    <p class="nota">${esc(p.cliente?.nombre||'')} · ${esc(p.folio)} · ${saldo > 0 ? 'debe ' + dinero(saldo) : 'ya está pagado'}</p>
     ${campoNum('f-monto','cuánto te pagó','min="0"')}
+    <p class="aviso falta" id="f-sobrepago" hidden style="margin:-4px 0 12px"></p>
     ${selectCuentas('f-cuenta')}
     <div class="campo"><label for="f-fecha">cuándo</label>
       <input type="date" id="f-fecha" value="${hoyISO()}"></div>
     <p class="nota" style="margin-bottom:12px">Los pagos no se borran ni se editan: si te
-      equivocas, se registra una corrección que deja ver qué pasó. Así el saldo siempre
-      cuadra con lo que de verdad entró.</p>
+      equivocas, en el pedido hay un botón <b>corregir</b> que lo revierte dejando rastro.
+      Así el saldo siempre cuadra con lo que de verdad entró.</p>
     <button class="btn" data-guardar style="width:100%">registrar</button>
   `, async () => {
-    const monto = parseFloat($('f-monto').value);
-    if (!Number.isFinite(monto) || monto <= 0) { avisar('Escribe cuánto te pagó'); return false; }
+    const montoCent = montoEnCentavos($('f-monto').value);
+    if (montoCent === null) { avisar('Escribe cuánto te pagó (menos de un millón)'); return false; }
     const fecha = $('f-fecha').value;
     if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
     try {
-      await addDoc(collection(db, RAIZ + '/cobros'), {
-        pedidoId, tipo: 'pago', montoCent: aCent(monto),
-        cuenta: $('f-cuenta').value, fecha,
-        registradoPor: estado.usuario.uid, opId: nuevaOp(), creadoEn: serverTimestamp()
+      const r = await escribirIdempotente(doc(db, RAIZ + '/cobros', opId), {
+        pedidoId, tipo: 'pago', montoCent, cuenta: $('f-cuenta').value, fecha,
+        registradoPor: estado.usuario.uid, opId, creadoEn: serverTimestamp()
       });
-      avisar('Pago registrado');
-    } catch (e) { console.error('cobro', e); avisar('No se pudo registrar'); return false; }
+      avisar(r === 'creado' ? 'Pago registrado' : 'Ese pago ya estaba registrado');
+    } catch (e) { console.error('cobro', e); avisar(mensajeError(e)); return false; }
+  });
+  // El sobrepago no se bloquea (un aviso nunca bloquea), pero se dice antes de guardar.
+  const aviso = $('f-sobrepago');
+  $('f-monto').addEventListener('input', () => {
+    const c = montoEnCentavos($('f-monto').value);
+    const exceso = c === null ? 0 : c - Math.max(0, saldo);
+    aviso.hidden = exceso <= 0;
+    if (exceso > 0) aviso.textContent = 'Con esto el pedido queda sobrepagado por ' + dinero(exceso) + '. Se puede, pero revisa el monto.';
+  });
+}
+
+// ── Corregir un pago: la única corrección posible ──────────────
+// Revierte el pago COMPLETO, una sola vez (el id es 'rev-' + el id del pago, y las
+// reglas exigen que coincida en pedido, monto y cuenta). Para corregir $100 que eran $80
+// se revierte y se registra un pago nuevo de $80. La reversión lleva la fecha de HOY: es
+// cuando se descubrió el error, y así el periodo en que ocurrió lo muestra.
+function dialogoCorregirPago(cobroId) {
+  // Sin esto, con los cobros a medio cargar el pago que se quiere corregir podría no
+  // encontrarse todavía y el botón fallaría en silencio.
+  if (!estado.cargado.cobros) { avisar('Espera un momento, se están cargando los pagos'); return; }
+  const c = estado.cobros.find(x => x.id === cobroId);
+  const p = c && estado.pedidos.find(x => x.id === c.pedidoId);
+  if (!c || !p || c.tipo !== 'pago') return;
+  if (!operaDinero()) { avisar('Las correcciones las hacen Gaby y Marcela'); return; }
+  const revId = 'rev-' + c.id;
+  // 'corregido' solo cuenta si el documento rev-<id> es de verdad una reversión: un pago
+  // nuevo que por azar heredara ese id no debe hacer creer que ya está corregido.
+  if (estado.cobros.some(x => x.id === revId && x.tipo === 'reversion')) { avisar('Ese pago ya está corregido'); return; }
+  abrirDialogo('Corregir pago', `
+    <p class="nota">${esc(p.cliente?.nombre||'')} · ${esc(p.folio)}</p>
+    <div class="tarjeta" style="box-shadow:none;margin:12px 0">
+      <div class="reng"><div class="reng-cuerpo">pago del ${esc(fechaCorta(c.fecha))} · ${esc(c.cuenta||'')}</div>
+        <div class="reng-lado monto">${dinero(c.montoCent)}</div></div>
+    </div>
+    <p class="nota" style="margin-bottom:12px">Esto <b>revierte el pago completo</b>: el pedido
+      vuelve a deber ${dinero(c.montoCent)} más y en el historial quedan los dos movimientos.
+      Si el monto correcto era otro, después registra el pago bueno.</p>
+    <button class="btn" data-guardar style="width:100%">sí, corregir este pago</button>
+  `, async () => {
+    try {
+      const r = await escribirIdempotente(doc(db, RAIZ + '/cobros', revId), {
+        pedidoId: c.pedidoId, tipo: 'reversion', refCobroId: c.id,
+        montoCent: c.montoCent, cuenta: c.cuenta || '', fecha: hoyISO(),
+        registradoPor: estado.usuario.uid, opId: revId, creadoEn: serverTimestamp()
+      });
+      avisar(r === 'creado' ? 'Pago corregido' : 'Ese pago ya estaba corregido');
+    } catch (e) { console.error('reversion', e); avisar(mensajeError(e)); return false; }
   });
 }
 
@@ -2684,6 +2944,12 @@ $('btn-nuevo-material').addEventListener('click', () => {
 function dialogoMovimiento(materialId) {
   const m = estado.materiales.find(x => x.id === materialId);
   if (!m) return;
+  // Solo quien opera dinero ve el selector de cuenta aquí abajo; solo a esos hay que
+  // frenarlos si el catálogo todavía no llega (Elita nunca ve ese campo).
+  if (operaDinero() && !estado.cargado.cuentas) {
+    avisar('Se están cargando las cuentas, intenta en un momento'); return;
+  }
+  const opId = nuevaOp();   // uno por intención, no por clic
   abrirDialogo('Movimiento de ' + m.nombre, `
     <p class="nota">tienes ${existencia(materialId)} ${esc(m.unidad||'')}</p>
     <div class="campo"><label for="f-tipo">qué pasó</label>
@@ -2694,7 +2960,11 @@ function dialogoMovimiento(materialId) {
       </select></div>
     <div class="campo"><label for="f-cantidad">cuántas ${esc(m.unidad||'piezas')}</label>
       <input type="number" id="f-cantidad" step="1" inputmode="numeric"></div>
+    ${operaDinero() ? `
     ${campoNum('f-costo','cuánto te costó en total (opcional)','min="0"')}
+    ${selectCuentas('f-cuentamov', '¿de qué cuenta salió el dinero?')}` : `
+    <p class="nota" style="margin-bottom:10px">El costo de la compra lo registran Gaby y
+      Marcela; tú registra la cantidad y avísales cuánto fue.</p>`}
     <div class="campo"><label for="f-fechamov">cuándo</label>
       <input type="date" id="f-fechamov" value="${hoyISO()}"></div>
     <p class="nota" style="margin-bottom:12px">En una corrección puedes poner número
@@ -2707,31 +2977,48 @@ function dialogoMovimiento(materialId) {
     if (tipo !== 'ajuste' && cant < 0) { avisar('Usa una cantidad positiva; el signo lo pone la app'); return false; }
     const fecha = $('f-fechamov').value;
     if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
-    const costo = parseFloat($('f-costo').value);
+    const textoCosto = $('f-costo')?.value ?? '';
+    const costoCent = textoCosto.trim() === '' ? null : montoEnCentavos(textoCosto);
+    if (textoCosto.trim() !== '' && costoCent === null) { avisar('El costo no es válido (menos de un millón)'); return false; }
     // El signo lo decide el tipo, no la persona: así una compra nunca resta por error.
     const cantidad = tipo === 'consumo' ? -Math.abs(cant) : (tipo === 'compra' ? Math.abs(cant) : cant);
+    const conGasto = tipo === 'compra' && costoCent !== null && operaDinero();
     try {
-      await addDoc(collection(db, RAIZ + '/invMovs'), {
-        materialId, tipo, cantidad, fecha,
-        costoCent: Number.isFinite(costo) && costo > 0 ? aCent(costo) : null,
-        quien: estado.usuario.uid, opId: nuevaOp(), creadoEn: serverTimestamp()
+      // La compra y su gasto van en UNA sola tanda atómica con ids fijos: antes eran dos
+      // escrituras seguidas y si la segunda fallaba quedaba material comprado sin dinero
+      // que saliera — y el reintento duplicaba el inventario.
+      const refMov = doc(db, RAIZ + '/invMovs', opId);
+      const refGasto = doc(db, RAIZ + '/gastos', opId + '-g');
+      const tanda = writeBatch(db);
+      tanda.set(refMov, {
+        materialId, tipo, cantidad, fecha, costoCent,
+        quien: estado.usuario.uid, opId, idOperacion: opId, creadoEn: serverTimestamp()
       });
-      // Una compra de material también es dinero que salió: si no se registra, el gasto
-      // por material que ella pidió nunca va a existir.
-      if (tipo === 'compra' && Number.isFinite(costo) && costo > 0) {
-        await addDoc(collection(db, RAIZ + '/gastos'), {
-          concepto: 'compra de ' + m.nombre, categoria: 'material',
-          montoCent: aCent(costo), fecha, materialId,
-          cuenta: '', quien: estado.usuario.uid, creadoEn: serverTimestamp()
-        });
+      if (conGasto) tanda.set(refGasto, {
+        concepto: 'compra de ' + m.nombre, categoria: 'material',
+        montoCent: costoCent, fecha, materialId, cuenta: $('f-cuentamov').value,
+        quien: estado.usuario.uid, opId: opId + '-g', idOperacion: opId, creadoEn: serverTimestamp()
+      });
+      try { await tanda.commit(); }
+      catch (e) {
+        // Si el primer intento sí llegó, el reintento choca: se confirma leyendo.
+        const ya = await getDoc(refMov).catch(() => null);
+        if (!(ya && ya.exists())) throw e;
+        // Existe, pero ¿es ESTE intento? Si el id lo ocupa otro movimiento, no es un
+        // reintento sino un choque, y eso se dice.
+        const d = ya.data();
+        if (d.opId !== opId || d.materialId !== materialId || d.cantidad !== cantidad) throw new Error('conflicto-id');
       }
       avisar('Movimiento registrado');
-    } catch (e) { console.error('movimiento', e); avisar('No se pudo registrar'); return false; }
+    } catch (e) { console.error('movimiento', e); avisar(mensajeError(e)); return false; }
   });
 }
 
 // ── Gastos ─────────────────────────────────────────────────────
 $('btn-nuevo-gasto').addEventListener('click', () => {
+  if (!operaDinero()) { avisar('Los gastos los registran Gaby y Marcela'); return; }
+  if (!estado.cargado.cuentas) { avisar('Se están cargando las cuentas, intenta en un momento'); return; }
+  const opId = nuevaOp();   // uno por intención, no por clic
   abrirDialogo('Nuevo gasto', `
     <div class="campo"><label for="f-concepto">en qué se fue</label>
       <input type="text" id="f-concepto" maxlength="60" placeholder="paquetería, impresión, marcos..."></div>
@@ -2750,21 +3037,54 @@ $('btn-nuevo-gasto').addEventListener('click', () => {
     <button class="btn" data-guardar style="width:100%">guardar gasto</button>
   `, async () => {
     const concepto = $('f-concepto').value.trim();
-    const monto = parseFloat($('f-montog').value);
+    const montoCent = montoEnCentavos($('f-montog').value);
     if (!concepto) { avisar('Escribe en qué se fue'); return false; }
-    if (!Number.isFinite(monto) || monto <= 0) { avisar('Escribe cuánto'); return false; }
+    if (montoCent === null) { avisar('Escribe cuánto (menos de un millón)'); return false; }
     const fecha = $('f-fechag').value;
     if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
     try {
-      await addDoc(collection(db, RAIZ + '/gastos'), {
-        concepto, categoria: $('f-categoria').value, montoCent: aCent(monto),
+      const r = await escribirIdempotente(doc(db, RAIZ + '/gastos', opId), {
+        concepto, categoria: $('f-categoria').value, montoCent,
         cuenta: $('f-cuentag').value, fecha,
-        quien: estado.usuario.uid, creadoEn: serverTimestamp()
+        quien: estado.usuario.uid, opId, creadoEn: serverTimestamp()
       });
-      avisar('Gasto guardado');
-    } catch (e) { console.error('gasto', e); avisar('No se pudo guardar'); return false; }
+      avisar(r === 'creado' ? 'Gasto guardado' : 'Ese gasto ya estaba guardado');
+    } catch (e) { console.error('gasto', e); avisar(mensajeError(e)); return false; }
   });
 });
+
+// ── Borrar un gasto: solo la dueña, y con constancia ───────────
+// Los gastos no son libro inmutable, pero borrar uno de $500 después del cierre baja
+// "gastaste" $500 aunque el banco no cambió. Por eso antes de borrarlo se escribe una
+// lápida en gastosBorrados con qué era y quién lo quitó, en la misma tanda atómica.
+function dialogoBorrarGasto(gastoId) {
+  const g = estado.gastos.find(x => x.id === gastoId);
+  if (!g) return;
+  if (!esDuena()) { avisar('Solo la dueña puede borrar un gasto'); return; }
+  abrirDialogo('Borrar gasto', `
+    <div class="tarjeta" style="box-shadow:none;margin:0 0 12px">
+      <div class="reng"><div class="reng-cuerpo"><div class="reng-tit">${esc(g.concepto||'gasto')}</div>
+        <div class="reng-meta">${esc(NOMBRE_CATEGORIA[g.categoria] || g.categoria || '')} · ${esc(fechaCorta(g.fecha))} · ${esc(g.cuenta||'')}</div></div>
+        <div class="reng-lado monto neg">${dinero(g.montoCent)}</div></div>
+    </div>
+    <p class="nota" style="margin-bottom:12px">Se quita del resumen y de los movimientos. Queda
+      constancia de que existió y de que tú lo borraste, para poder explicar después por qué
+      cambió un cierre.${g.materialId ? ' <b>Ojo:</b> este gasto nació de una compra de material; la compra en inventario se queda.' : ''}</p>
+    <button class="btn" data-guardar style="width:100%">sí, borrar este gasto</button>
+  `, async () => {
+    try {
+      const tanda = writeBatch(db);
+      tanda.set(doc(db, RAIZ + '/gastosBorrados', g.id), {
+        gastoId: g.id, concepto: g.concepto || '', categoria: g.categoria || '',
+        montoCent: g.montoCent || 0, cuenta: g.cuenta || '', fecha: g.fecha || '',
+        borradoPor: estado.usuario.uid, borradoEn: serverTimestamp()
+      });
+      tanda.delete(doc(db, RAIZ + '/gastos', g.id));
+      await tanda.commit();
+      avisar('Gasto borrado');
+    } catch (e) { console.error('borrar gasto', e); avisar(mensajeError(e)); return false; }
+  });
+}
 
 // ── Pendientes ─────────────────────────────────────────────────
 $('btn-nueva-tarea').addEventListener('click', () => {
@@ -2814,7 +3134,20 @@ function escuchar() {
     }, e => { console.error('escuchar ' + ruta, e); punto('mal'); });
     desuscribir.push(u);
   });
+  // El catálogo de cuentas de cobro: un solo documento que edita la dueña.
+  desuscribir.push(onSnapshot(doc(db, RAIZ + '/config', 'cuentas'), snap => {
+    const lista = snap.exists() ? snap.data().lista : null;
+    estado.catalogo.cuentas = Array.isArray(lista)
+      ? lista.filter(c => typeof c === 'string' && c.trim()).slice(0, 12) : [];
+    estado.cargado.cuentas = true;
+    // Sin esto, un pantalla ya pintada con avisos de "cargando cuentas" (C3) se quedaba
+    // así hasta el siguiente repintado por otro motivo: nada más avisaba de que YA llegó.
+    pintarTodo();
+  }, e => { console.error('escuchar config/cuentas', e); punto('mal'); }));
 }
+// Cuando el teléfono recupera señal, se vuelve a enganchar en vez de esperar a que el
+// SDK reintente cuando le parezca. Patrón de mi-cartera.
+window.addEventListener('online', () => { if (estado.usuario && db) { punto(''); escuchar(); } });
 </script>
 </body>
 </html>
