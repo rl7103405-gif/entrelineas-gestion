@@ -312,6 +312,17 @@ cambió el diseño de las etapas antes de escribirlo, y no se re-discute:
   que era para la Ciudad de México)*. Va por el camino auditado: no es dinero, pero cambia
   la urgencia por los días de paquetería, y la auditoría amarra `entrega` y `ciudad` en las
   dos direcciones igual que el total.
+- **Un pedido en `listo` dice que ya está hecho, y `urgencia()` lo evalúa ANTES que lo
+  vencido.** Elita: *"este cuadro ya lo marqué como listo y me sigue saliendo en el
+  inicio"*. Sigue en la cola a propósito —listo no es entregado: falta darla y cobrarla—
+  pero antes la etiqueta decía "hoy o mañana", como si faltara hacerla (solo los foráneos
+  decían "lista, falta enviarla"). Ahora dice *lista, falta entregarla* / *falta enviarla*,
+  y si además va tarde, *ya debió entregarse* en rojo, conservando la prioridad de lo
+  vencido. "Se pasó la fecha" queda solo para lo que de verdad falta hacer.
+- **Botón "ya se entregó" en la tarjeta**, solo en pedidos `listo`: es el paso que los saca
+  de la cola, y era la fricción real detrás del reclamo. Escribe un solo campo. Si la
+  clienta todavía debe, pide confirmación —un aviso nunca bloquea, pero que nadie se entere
+  después de que la pieza ya salió sin cobrarse.
 - **Filtros**: `filtrarPedidos(items, f, hoy)` es puro y recibe `hoy` para probarse. Seis
   `<select>` (estado · Puebla/foráneo · urgencia · cuándo se entrega · origen · etapa), y
   el valor vive en `filtrosPedidos`, no en el DOM, para sobrevivir al repintado. Con

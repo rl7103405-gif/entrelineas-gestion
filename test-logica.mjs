@@ -680,6 +680,34 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
   chk('un foraneo a 3 dias es urgente, no proximo', t3.filtrarPedidos(t3.pedidosOrdenados(), {...D, urgencia:'urgente'}, hoy).length === 1);
 }
 
+// -- un pedido LISTO dice que ya esta hecho (7-sep-2026, de Elita) ----
+// "Este cuadro ya lo marque como listo y me sigue saliendo en el inicio": sigue en la cola
+// a proposito (falta entregarlo y cobrarlo), pero la etiqueta no puede decir "hoy o manana"
+// como si faltara hacerlo.
+{
+  const t = api({pedidos: [], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  const hoyI = t.hoyISO();
+  const listo = (extra) => t.urgencia({estado:'listo', fechaComprometida: hoyI, entrega:'local', ...extra});
+  chk('un pedido listo local dice que falta entregarla', listo().texto === 'lista, falta entregarla');
+  // a un foraneo se le restan 3 dias habiles, asi que uno para hoy ya deberia haber salido
+  chk('un foraneo listo para hoy dice que ya debio salir', listo({entrega:'foraneo'}).texto === 'lista, ya debio enviarla'.replace('debio','debió'));
+  chk('un foraneo listo con margen dice que falta enviarla',
+      t.urgencia({estado:'listo', fechaComprometida:'2026-12-31', entrega:'foraneo'}).texto === 'lista, falta enviarla');
+  chk('un listo a tiempo va en rango 2', listo().rango === 2);
+  chk('un pedido listo ya NO dice "hoy o manana"', !listo().texto.includes('hoy'));
+  const cola = api({pedidos: [{id:'a', folio:'a', estado:'listo', fechaComprometida: hoyI, entrega:'local', totalCent:1, renglones:[]},
+                              {id:'b', folio:'b', estado:'entregado', fechaComprometida: hoyI, entrega:'local', totalCent:1, renglones:[]}],
+                    cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  chk('listo sigue en la cola, entregado no', cola.pedidosOrdenados().map(x => x.p.id).join(',') === 'a');
+  // si ya esta lista y encima va tarde, lo dice sin fingir que falta hacerla, y conserva
+  // la prioridad de lo vencido
+  const tarde = t.urgencia({estado:'listo', fechaComprometida:'2026-01-01', entrega:'local'});
+  chk('un listo atrasado dice que ya debio entregarse, no "se paso la fecha"',
+      tarde.texto === 'lista, ya debió entregarla' && tarde.rango === 1);
+  chk('y un pedido NO listo con la fecha pasada si dice que se paso',
+      t.urgencia({estado:'proceso', fechaComprometida:'2026-01-01', entrega:'local'}).texto === 'se pasó la fecha');
+}
+
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total
                                  : fallos + ' FALLAS de ' + total));
 process.exit(fallos ? 1 : 0);

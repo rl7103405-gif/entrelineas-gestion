@@ -667,8 +667,20 @@ function urgencia(p) {
   const fo = fechaOperativa(p);
   const dias = fo ? habilesEntre(hoyISO(), fo) : null;
   if (!esFechaValida(p.fechaComprometida)) return {rango:0, dias:null, texto:'falta confirmar la fecha', clase:'p-ambar'};
+  // Un pedido en "listo" ya no se trabaja: lo que falta es sacarlo. Va ANTES de lo vencido
+  // porque "se pasó la fecha" suena a que falta hacerlo, y la pieza ya está hecha; si
+  // además va tarde, se dice, y conserva la prioridad de lo vencido.
+  // Antes solo los foráneos decían algo, y una pieza local marcada como lista seguía
+  // anunciando "hoy o mañana" — Elita: "ya lo marqué como listo y me sigue saliendo".
+  // Sigue en la cola a propósito: listo no es entregado, falta darla y cobrarla.
+  if (p.estado === 'listo') {
+    const tarde = dias !== null && dias < 0;
+    const salir = p.entrega === 'foraneo' ? 'enviarla' : 'entregarla';
+    return {rango: tarde ? 1 : 2, dias,
+            texto: tarde ? 'lista, ya debió ' + salir : 'lista, falta ' + salir,
+            clase: tarde ? 'p-rojo' : 'p-ambar'};
+  }
   if (dias !== null && dias < 0) return {rango:1, dias, texto:'se pasó la fecha', clase:'p-rojo'};
-  if (p.estado === 'listo' && p.entrega === 'foraneo') return {rango:2, dias, texto:'lista, falta enviarla', clase:'p-ambar'};
   if (dias !== null && dias <= 1) return {rango:3, dias, texto:'hoy o mañana', clase:'p-rojo'};
   if (dias !== null && dias <= 3) return {rango:4, dias, texto:'quedan ' + dias + ' días hábiles', clase:'p-ambar'};
   return {rango:5, dias, texto:'quedan ' + dias + ' días hábiles', clase:'p-verde'};
@@ -1184,12 +1196,18 @@ function pintarPedidos() {
           <div class="monto">${dinero(p.totalCent)}</div>
           <button class="btn suave chico" style="margin-top:8px"
             data-pedido="${esc(p.id)}">ver</button>
+          ${p.estado === 'listo' ? `<button class="btn linea chico" style="margin-top:6px"
+            data-entregado="${esc(p.id)}">ya se entregó</button>` : ''}
         </div>
       </div>
     </div>`;
   }).join('');
   cont.querySelectorAll('[data-pedido]').forEach(b =>
     b.addEventListener('click', () => abrirPedido(b.dataset.pedido)));
+  // El atajo que pidió Beto: sacar de la cola lo que ya se entregó sin abrir el detalle.
+  // Solo aparece en un pedido "listo", que es el único paso que tiene sentido de un toque.
+  cont.querySelectorAll('[data-entregado]').forEach(b =>
+    b.addEventListener('click', () => marcarEntregado(b.dataset.entregado, b)));
 
   // El aviso de material va aquí arriba también: es donde se decide qué se trabaja hoy.
   const falta = faltantes();
@@ -3174,6 +3192,25 @@ function abrirPedido(id) {
   if (pagar) pagar.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCobro(p.id), 60); });
   const corr = $('dlg-cuerpo').querySelector('[data-corregir-pedido]');
   if (corr) corr.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCorregirPedido(p.id), 60); });
+}
+
+// Un solo campo, y solo desde 'listo': no es una máquina de estados, es el último paso.
+async function marcarEntregado(pedidoId, boton) {
+  const p = estado.pedidos.find(x => x.id === pedidoId);
+  if (!p || p.estado !== 'listo') return;
+  const saldo = saldoDe(p);
+  // Un aviso nunca bloquea: se entrega igual, pero que nadie se entere después de que
+  // la pieza ya salió sin cobrarse.
+  if (saldo > 0 && !confirm(`${p.cliente?.nombre || 'Esta clienta'} todavía debe ${dinero(saldo)}.
+¿Aun así la marcas como entregada?`)) return;
+  if (boton) boton.disabled = true;
+  try {
+    await updateDoc(doc(db, RAIZ + '/pedidos', pedidoId), {estado: 'entregado'});
+    avisar('Entregado. Ya salió de la lista');
+  } catch (e) {
+    console.error('marcar entregado', e); avisar(mensajeError(e));
+    if (boton) boton.disabled = false;
+  }
 }
 
 // ── Etapas en el detalle ───────────────────────────────────────
