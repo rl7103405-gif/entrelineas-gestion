@@ -35,7 +35,9 @@ const api = new Function('estado', fuente + `
           // indicadores (4-sep-2026)
           fechaCivilDe, fechaAltaDe, fmtCorto, compararPeriodos, totalesEn, deltaPct,
           textoDelta, textoBalance, gastosParaPastel, rebanadas, arcosDonut,
-          movimientosDe, agruparPorDia, limitarPorDias, montoCobro, porCuentaDe};
+          movimientosDe, agruparPorDia, limitarPorDias, montoCobro, porCuentaDe,
+          // envio cobrado y anticipo en el alta (7-sep-2026)
+          envioDe, piezasDe, anticipoSugerido, ENVIO_SUGERIDO_CENT};
 `);
 
 // ── utilidades de prueba ───────────────────────────────────────
@@ -501,6 +503,46 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
   chk('29 feb no bisiesto: la app SÍ lo rechaza', t.esFechaValida('2026-02-29') === false);
   chk('29 feb bisiesto: las dos coinciden en aceptarlo',
       REGEX_REGLAS.test('2024-02-29') === true && t.esFechaValida('2024-02-29') === true);
+}
+
+// -- envio cobrado y anticipo sugerido (7-sep-2026) -------------
+// El envio que paga la clienta va DENTRO del total (es lo que debe) pero guardado aparte,
+// para poder decir despues cuanto fue trabajo y cuanto paqueteria.
+{
+  const t = api({pedidos: [], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  const foraneo = {id:'p1', totalCent: 90000, envioCobradoCent: 15000, entrega:'foraneo'};
+  const local   = {id:'p2', totalCent: 75000, envioCobradoCent: 0, entrega:'local'};
+  const viejo   = {id:'p3', totalCent: 75000, entrega:'local'};   // capturado antes del cambio
+  chk('el envio cobrado se lee del pedido', t.envioDe(foraneo) === 15000);
+  chk('un pedido local no cobra envio', t.envioDe(local) === 0);
+  chk('un pedido viejo sin el campo vale cero, no NaN', t.envioDe(viejo) === 0);
+  chk('un envio corrupto no propaga NaN', t.envioDe({totalCent: 100, envioCobradoCent: 'x'}) === 0);
+  chk('las piezas son el total menos el envio', t.piezasDe(foraneo) === 75000);
+  chk('en un pedido local las piezas son el total', t.piezasDe(local) === 75000);
+  chk('el saldo sigue saliendo del total, envio incluido', t.saldoDe(foraneo) === 90000);
+
+  // El 50% acordado con las clientas: la mitad del total, envio incluido.
+  chk('el 50% de $900 es $450', t.anticipoSugerido(90000) === 45000);
+  chk('el 50% redondea el centavo impar hacia arriba', t.anticipoSugerido(75001) === 37501);
+  chk('el 50% de un total en cero es cero', t.anticipoSugerido(0) === 0);
+  chk('el 50% de un total ausente no es NaN', t.anticipoSugerido(undefined) === 0);
+  chk('dos mitades nunca cobran de menos que el total', t.anticipoSugerido(75001) * 2 >= 75001);
+  chk('el envio sugerido son los $150 que dijo Beto', t.ENVIO_SUGERIDO_CENT === 15000);
+}
+
+// -- el envio entra en lo vendido, la pieza cuenta una vez ------
+{
+  const pedidos = [
+    {id:'a', estado:'nuevo', entrega:'foraneo', totalCent: 90000, envioCobradoCent: 15000,
+     renglones:[{nombre:'Cuadro', cantidad:1, precioUnitCent:75000}],
+     fechaComprometida:'2026-09-10', creadoEn:{toDate:() => new Date('2026-09-07T12:00:00')}}
+  ];
+  const t = api({pedidos, cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  const desde = new Date('2026-09-07T00:00:00'), hasta = new Date('2026-09-08T00:00:00');
+  const tot = t.totalesEn({pedidos, cobros: [], gastos: []}, desde, hasta);
+  chk('lo vendido incluye el envio cobrado', tot.vendido === 90000);
+  chk('la pieza sigue contando una sola vez',
+      pedidos[0].renglones.reduce((n, r) => n + r.cantidad, 0) === 1);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total

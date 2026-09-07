@@ -77,6 +77,74 @@ service cloud.firestore {
       function firmadoPorMi(campo) {
         return request.resource.data.get(campo, '') == request.auth.uid;
       }
+      // ── corregir el precio de un pedido, con rastro (7-sep-2026) ──
+      // El pedido dice cuál es su corrección (`correccionOpId`) y aquí se busca ESE
+      // documento: tiene que escribirse en la misma tanda, apuntar a este pedido y decir
+      // exactamente los mismos números que quedan en el pedido. Así nadie puede escribir
+      // una auditoría que cuente una cosa y un pedido que cuente otra.
+      //
+      // El opId además tiene que ser NUEVO: si se aceptara el mismo de la corrección
+      // anterior, una segunda corrección se colgaría del rastro de la primera y el cambio
+      // de hoy no quedaría registrado en ningún lado.
+      //
+      // Lo primero es que la auditoría sea NUEVA. `getAfter()` ve el estado posterior pero
+      // no prueba que el documento se haya escrito en esta operación: sin esto, alguien
+      // podía crear la auditoría hoy y usarla para un cambio de precio mañana, o reusar la
+      // de un ida y vuelta $100 → $200 → $100. Hallazgo crítico de Codex, 7-sep-2026.
+      // `!exists() && existsAfter()` sí lo prueba: no estaba antes y está después, así que
+      // nació en esta misma tanda atómica.
+      function correccionAuditada(pedidoId) {
+        return request.resource.data.get('correccionOpId', '') is string
+          && request.resource.data.get('correccionOpId', '').size() > 0
+          && request.resource.data.get('correccionOpId', '') != resource.data.get('correccionOpId', '')
+          && !exists(rutaAuditoria(request.resource.data.get('correccionOpId', '')))
+          && existsAfter(rutaAuditoria(request.resource.data.get('correccionOpId', '')))
+          && auditoriaCuadra(auditoria(request.resource.data.get('correccionOpId', '')), pedidoId);
+      }
+      // Y lo segundo es que diga la verdad. Se amarra en las dos direcciones: el "antes"
+      // contra lo que el pedido decía y el "después" contra lo que va a decir. Una
+      // auditoría que registre otros números no sirve de nada.
+      function auditoriaCuadra(a, pedidoId) {
+        return a.pedidoId == pedidoId
+          && a.despues.totalCent == request.resource.data.totalCent
+          && a.despues.envioCobradoCent == request.resource.data.get('envioCobradoCent', 0)
+          && a.despues.renglones == request.resource.data.renglones
+          && a.despues.cliente == request.resource.data.cliente.nombre
+          && a.antes.totalCent == resource.data.totalCent
+          && a.antes.envioCobradoCent == resource.data.get('envioCobradoCent', 0)
+          && a.antes.renglones == resource.data.renglones
+          && a.antes.cliente == resource.data.get('cliente', {}).get('nombre', '');
+      }
+      // RIESGO ACEPTADO: no se exige `creadoEn == request.time` en la auditoría. Amarrarlo
+      // evitaría que alguien fechara el rastro en otro día, pero si serverTimestamp() no
+      // resolviera exactamente a request.time, TODA corrección quedaría bloqueada — y eso
+      // no se puede comprobar aquí sin emulador (Java no está instalado). Falsear la fecha
+      // exige un cliente manipulado por una de las tres personas del negocio, y el cambio
+      // en sí ya no se puede ocultar. Se puede cerrar más adelante, probándolo.
+      function rutaAuditoria(opId) {
+        return /databases/$(database)/documents/negocios/$(negocio)/pedidosCambios/$(opId);
+      }
+      function auditoria(opId) { return getAfter(rutaAuditoria(opId)).data; }
+      // Las reglas no pueden sumar una lista de renglones de largo variable, así que el
+      // cliente guarda ese subtotal y aquí se exige la única igualdad que importa:
+      // total = piezas + envío. Sin esto se podía guardar por SDK un pedido cuyo total no
+      // tuviera nada que ver con sus renglones, y el detalle, el saldo y "vendiste"
+      // decían cosas distintas.
+      function cuadraTotal(d) {
+        return d.subtotalPiezasCent is int
+          && d.subtotalPiezasCent >= 0
+          && d.totalCent == d.subtotalPiezasCent + d.get('envioCobradoCent', 0);
+      }
+      // Lo que se le COBRA a la clienta por el envío (no la guía, que es un gasto). Va
+      // dentro del total, así que nunca puede ser mayor, y un pedido que se recoge en
+      // Puebla no cobra envío.
+      function envioValido(d) {
+        return d.get('envioCobradoCent', 0) is int
+          && d.get('envioCobradoCent', 0) >= 0
+          && d.get('envioCobradoCent', 0) <= d.totalCent
+          && d.get('entrega', 'local') in ['local','foraneo']
+          && (d.get('entrega', 'local') == 'foraneo' || d.get('envioCobradoCent', 0) == 0);
+      }
 
       // ── el negocio y sus miembros ─────────────────────────────
       allow read: if esMiembro();
@@ -104,23 +172,93 @@ service cloud.firestore {
                       && request.resource.data.renglones is list
                       && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado']
                       && request.resource.data.get('origen', '') is string
-                      && request.resource.data.get('origen', '').size() <= 20;
-        // Lo que vale el pedido NO se toca después de creado. Caso concreto (Codex,
-        // 4-sep-2026): pedido de $1,500 con $500 pagados; alguien baja el total a $500 y
-        // el pedido desaparece de "cuentas" con $1,000 sin cobrar y sin que nada lo
-        // muestre. Si un precio se capturó mal, hoy el camino es cancelar y volver a
-        // capturar; un "corregir precio" con auditoría está en IDEAS.md.
+                      && request.resource.data.get('origen', '').size() <= 20
+                      && envioValido(request.resource.data)
+                      && cuadraTotal(request.resource.data);
+        // Dos updates distintos, y la diferencia es si el dinero cambia.
+        //
+        // (a) El de todos los días —estado, fecha confirmada, notas— no toca el precio:
+        //     total, renglones y envío se quedan como estaban.
+        // (b) La CORRECCIÓN del pedido (7-sep-2026, pedida por Beto el primer día de uso)
+        //     sí cambia precio, pieza y envío, pero solo si en la MISMA tanda se escribe
+        //     su documento de auditoría en pedidosCambios. El caso que ganó Codex el
+        //     4-sep sigue siendo real —bajar el total deja el pedido sobrepagado— pero ya
+        //     no es invisible: queda quién, cuándo, por qué, y cuánto se había pagado.
+        //     Sin auditoría en la tanda, existsAfter() sobre ella es false y el update se
+        //     rechaza (y si se intentara leer su .data, el acceso a un documento que no
+        //     existe también hace fallar la regla: en los dos casos cierra, no abre).
+        //
+        // El folio y el origen no se tocan en ninguno de los dos: el folio identifica al
+        // pedido en voz alta y en papel, y el origen es el dato con el que Marcela mide si
+        // la publicidad se paga sola (cambiarlo después reescribe la historia).
         allow update: if esMiembro()
                       && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado']
-                      // el folio identifica al pedido en voz alta y en papel: no se renombra
                       && request.resource.data.folio == resource.data.folio
-                      && request.resource.data.totalCent == resource.data.totalCent
-                      && request.resource.data.renglones == resource.data.renglones
-                      && request.resource.data.get('origen', '') == resource.data.get('origen', '');
+                      && request.resource.data.get('origen', '') == resource.data.get('origen', '')
+                      && request.resource.data.get('entrega', 'local') == resource.data.get('entrega', 'local')
+                      && envioValido(request.resource.data)
+                      && (
+                        // (a) el update de siempre: solo estado y fecha confirmada. La
+                        // lista blanca es lo que impide que por SDK se cambien el cliente,
+                        // las notas, quién lo creó o el propio correccionOpId (con el que
+                        // se podría preparar el terreno para una corrección sin rastro).
+                        ( request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['estado','fechaComprometida'])
+                          // La lista blanca dice QUÉ se puede tocar, no CÓMO: sin esto se
+                          // podía meter un mapa o un texto enorme en la fecha de un pedido
+                          // ajeno y dejarlo mostrando "—" para siempre.
+                          && ( request.resource.data.fechaComprometida == null
+                               || fechaValida(request.resource.data.fechaComprometida) ) )
+                        // (b) corrección con rastro, y solo quien opera dinero
+                        || ( operaDinero() && correccionAuditada(id)
+                             && cuadraTotal(request.resource.data)
+                             && request.resource.data.diff(resource.data).affectedKeys()
+                                  .hasOnly(['cliente','renglones','totalCent','subtotalPiezasCent',
+                                            'envioCobradoCent','correccionOpId']) )
+                      );
         // un pedido no se borra: se cancela, para que su historial de cobros siga
         // explicando el dinero que ya entró
         allow delete: if false;
       }
+      // ── LIBRO DE CORRECCIONES DE PEDIDO: inmutable ────────────
+      // El rastro de cada corrección de precio. Se escribe en la misma tanda que el
+      // update del pedido (arriba, correccionAuditada()) y no se edita ni se borra: si se
+      // pudiera, la auditoría no auditaría nada.
+      match /pedidosCambios/{id} {
+        allow read:   if esMiembro();
+        allow create: if operaDinero()
+                      && request.resource.data.opId == id
+                      && request.resource.data.pedidoId is string
+                      // El pedido tiene que existir DESDE ANTES (una corrección corrige
+                      // algo que ya estaba) y tiene que quedar apuntando a esta auditoría.
+                      // Esa reciprocidad es lo que impide sembrar auditorías sueltas para
+                      // usarlas después: sin el update del pedido en la misma tanda, este
+                      // create se rechaza.
+                      && exists(/databases/$(database)/documents/negocios/$(negocio)/pedidos/$(request.resource.data.pedidoId))
+                      && getAfter(/databases/$(database)/documents/negocios/$(negocio)/pedidos/$(request.resource.data.pedidoId))
+                           .data.get('correccionOpId', '') == id
+                      // ...y con el mismo total que dice esta auditoría. Cerrar el círculo
+                      // en las dos direcciones impide un rastro que cuente otra historia.
+                      && getAfter(/databases/$(database)/documents/negocios/$(negocio)/pedidos/$(request.resource.data.pedidoId))
+                           .data.totalCent == request.resource.data.despues.totalCent
+                      && request.resource.data.despues.cliente is string
+                      && request.resource.data.despues.cliente.size() <= 60
+                      && request.resource.data.motivo is string
+                      && request.resource.data.motivo.size() > 0
+                      && request.resource.data.motivo.size() <= 120
+                      && request.resource.data.antes.totalCent is int
+                      && request.resource.data.despues.totalCent is int
+                      && request.resource.data.despues.totalCent >= 0
+                      && request.resource.data.despues.totalCent < 100000000
+                      // Es un dato DECLARADO por quien corrige, no verificable: las reglas
+                      // no pueden sumar la colección de cobros. Sirve de contexto al leer
+                      // el rastro, pero la verdad de lo pagado siempre está en `cobros`.
+                      && request.resource.data.pagadoAlCorregir is int
+                      && fechaValida(request.resource.data.fecha)
+                      && firmadoPorMi('corregidoPor');
+        allow update, delete: if false;
+      }
+
       match /clientes/{id} {
         allow read: if esMiembro();
         allow write: if esMiembro();
@@ -128,9 +266,13 @@ service cloud.firestore {
 
       // ── LIBRO DE COBROS: inmutable ────────────────────────────
       // Un pago siempre apunta a un pedido que existe y dice en qué cuenta cayó.
+      // existsAfter() y no exists(): desde el 7-sep-2026 el anticipo se captura en el alta
+      // del pedido y los dos documentos se escriben en la MISMA transacción, así que
+      // cuando se evalúa esta regla el pedido todavía no existe "antes" — existe después.
+      // Para un cobro posterior el pedido ya está, y existsAfter() también lo ve.
       function pedidoExiste(pid) {
         return pid is string
-          && exists(/databases/$(database)/documents/negocios/$(negocio)/pedidos/$(pid));
+          && existsAfter(/databases/$(database)/documents/negocios/$(negocio)/pedidos/$(pid));
       }
       // La única corrección posible es revertir un pago COMPLETO, una sola vez: el id de la
       // reversión es 'rev-' + el id del pago, así que no puede haber dos. Debe coincidir

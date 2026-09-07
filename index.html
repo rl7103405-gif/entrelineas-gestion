@@ -488,6 +488,16 @@ const fechaCorta = f => esFechaValida(f)
 // paquetería y ella prefiere 3 de colchón. No es una suposición, es dato suyo.
 const DIAS_PAQUETERIA = 3;
 
+// Lo que se le COBRA a la clienta por el envío. No es el gasto de la guía (ese va como
+// gasto de categoría 'envio'): son dos cifras distintas y por eso el campo se llama
+// envioCobradoCent. $150 es lo que dijo Beto el 7-sep-2026 y NO está confirmado con la
+// clienta, así que NUNCA se prellena: se ofrece con un botón y quien captura decide.
+const ENVIO_SUGERIDO_CENT = 15000;
+// El anticipo que acordaron pedir: la mitad del total, envío incluido. Beto: "les dije que
+// pedimos cincuenta por ciento de anticipo". Con centavos impares se redondea hacia arriba
+// en el peso más cercano, y la clienta liquida la diferencia exacta al entregar.
+const anticipoSugerido = totalCent => Math.round((totalCent || 0) / 2);
+
 // ═══════════════════════════════════════════════════════════════
 //  ESTADO
 // ═══════════════════════════════════════════════════════════════
@@ -537,6 +547,12 @@ function pagadoDe(pedidoId) {
 // El saldo NO se trunca en cero a propósito: si sale negativo es un sobrepago, y eso hay
 // que verlo, no esconderlo.
 function saldoDe(p) { return (p.totalCent || 0) - pagadoDe(p.id); }
+// Lo que se le cobró de envío a la clienta. Los pedidos capturados antes del 7-sep-2026 no
+// traen el campo: para ellos el envío cobrado es cero, no un dato faltante.
+const envioDe = p => Number.isFinite(p?.envioCobradoCent) ? p.envioCobradoCent : 0;
+// Lo que valen las piezas, sin el envío. El total lo manda el pedido (es lo que la clienta
+// debe), pero para saber cuánto se vendió de trabajo hay que descontar lo trasladado.
+const piezasDe = p => (p.totalCent || 0) - envioDe(p);
 // La regla "una reversión resta" vivía copiada en cinco reduces distintos: corregirla en
 // cuatro y dejar el quinto mintiendo ya pasó. De aquí para adelante solo vive aquí.
 const montoCobro = c => c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0);
@@ -769,6 +785,10 @@ function totalesEn(estado, desde, hasta) {
   const gastado = gastos.reduce((a,g) => a + (g.montoCent||0), 0);
   return { vendidos, cobros, gastos,
            vendido: vendidos.reduce((t,p) => t + (p.totalCent||0), 0),
+           // Lo cobrado de envío en el periodo. "Vendiste" incluye el envío porque es lo
+           // que la clienta debe, pero un mes con muchos foráneos infla la cifra y hay que
+           // poder decir cuánto de eso fue paquetería trasladada, no trabajo vendido.
+           envio: vendidos.reduce((t,p) => t + envioDe(p), 0),
            cobrado, gastado, balance: cobrado - gastado,
            hayDatos: vendidos.length + cobros.length + gastos.length > 0 };
 }
@@ -1269,6 +1289,8 @@ function pintarResumen() {
   $('res-cifras').innerHTML = `
     <div class="tarjeta"><div class="sub">vendiste (${t.vendidos.length} pedido${t.vendidos.length===1?'':'s'} nuevo${t.vendidos.length===1?'':'s'})</div>
       <div class="monto" style="font-size:26px">${dinero(t.vendido)}</div>
+      ${t.envio > 0 ? `<div class="nota">incluye ${dinero(t.envio)} de envíos cobrados —
+        de piezas: ${dinero(t.vendidos.reduce((s,p) => s + piezasDe(p), 0))}</div>` : ''}
       ${linea(deltaDe(ta.vendido, tp.vendido))}</div>
     <div class="tarjeta"><div class="sub">cobraste</div>
       <div class="monto ${t.cobrado < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(t.cobrado)}</div>
@@ -2581,6 +2603,9 @@ function dialogoCuentas() {
 // como compromiso) y trae el folio que la página ya le puso.
 function abrirNuevoPedido(prefill = {}) {
   const hoy = hoyISO();
+  // Uno por intención, no por clic: si el botón se pulsa dos veces o la transacción se
+  // reintenta, el anticipo cae siempre en el mismo documento y no se duplica el dinero.
+  const opIdAnticipo = nuevaOp();
   abrirDialogo(prefill.folio ? 'Pedido de la página' : 'Nuevo pedido', `
     ${prefill.folio ? `<p class="nota" style="margin-bottom:12px">folio ${esc(prefill.folio)} —
       revisa lo prellenado, ponle el nombre y el precio, y guarda.</p>` : ''}
@@ -2605,6 +2630,16 @@ function abrirNuevoPedido(prefill = {}) {
       <div class="campo"><label for="f-ciudad">ciudad (si es envío)</label>
         <input type="text" id="f-ciudad" maxlength="60" value="${esc(prefill.ciudad || '')}"></div>
     </div>
+    <!-- El envío solo aparece cuando hay envío, y va VACÍO: los $150 son lo que se cobra
+         normalmente, no una tarifa confirmada, y una vez guardado el total no se edita sin
+         dejar rastro. El botón lo pone de un toque para quien ya lo confirmó. -->
+    <div id="caja-envio" hidden>
+      ${campoNum('f-envio','envío que le cobras a la clienta','min="0"')}
+      <p class="nota" style="margin:-8px 0 12px">Es lo que ELLA paga por el envío, no lo que
+        cuesta la guía (eso va como gasto). Se suma al total.
+        <button type="button" class="btn linea chico" id="btn-envio-sug"
+          style="margin-left:6px;padding:2px 8px;font-size:12px">usar $150.00</button></p>
+    </div>
     <div class="fila2">
       <div class="campo"><label for="f-solicitada">fecha que pidió la clienta</label>
         <input type="date" id="f-solicitada" value="${esc(prefill.fechaSolicitada || hoy)}"></div>
@@ -2621,6 +2656,23 @@ function abrirNuevoPedido(prefill = {}) {
       paga sola. En el resumen sale cuánto vendió cada origen.</p>
     <div class="campo"><label for="f-notas">detalles</label>
       <textarea id="f-notas" rows="2" maxlength="500" placeholder="qué debe decir, colores, referencias...">${esc(prefill.ocasion ? 'Ocasión: ' + prefill.ocasion : '')}</textarea></div>
+    <!-- El anticipo se captura AQUÍ porque es el momento en que ocurre: la clienta aparta
+         con el 50% y hoy había que ir a otra pantalla a registrarlo. Se guarda como un
+         pago normal, en la misma transacción que el pedido: o quedan los dos o ninguno.
+         El rol 'apoyo' no ve esto (ni las reglas se lo permitirían). -->
+    ${operaDinero() ? `
+      <div class="tarjeta" style="box-shadow:none;background:var(--suave,#f7f4f1);padding:12px;margin-bottom:12px">
+        <p class="sub" style="margin-bottom:8px">¿te dio anticipo ahora?</p>
+        ${campoNum('f-anticipo','cuánto te dio (déjalo vacío si no dio nada)','min="0"')}
+        <p class="nota" style="margin:-8px 0 12px">El 50% de este pedido sería
+          <b id="f-mitad">—</b>.
+          <button type="button" class="btn linea chico" id="btn-mitad"
+            style="margin-left:6px;padding:2px 8px;font-size:12px">usar el 50%</button></p>
+        <p class="aviso falta" id="f-anticipo-aviso" hidden style="margin:-4px 0 12px"></p>
+        ${selectCuentas('f-anticipo-cuenta')}
+        <div class="campo"><label for="f-anticipo-fecha">cuándo lo dio</label>
+          <input type="date" id="f-anticipo-fecha" value="${hoy}"></div>
+      </div>` : ''}
     <button class="btn" data-guardar style="width:100%">guardar pedido</button>
   `, async () => {
     const nombre = $('f-cliente').value.trim();
@@ -2636,7 +2688,16 @@ function abrirNuevoPedido(prefill = {}) {
     const comprometida = $('f-comprometida').value;
     if (comprometida && !esFechaValida(comprometida)) { avisar('La fecha confirmada no es válida'); return false; }
     const entrega = $('f-entrega').value;
-    const totalCent = aCent(precio) * cant;
+    // El envío se cobra solo cuando hay envío. Vacío es cero, pero un texto inválido o un
+    // negativo NO es cero: eso se avisa, no se traga en silencio.
+    const envioTexto = ($('f-envio')?.value || '').trim();
+    let envioCobradoCent = 0;
+    if (entrega === 'foraneo' && envioTexto !== '') {
+      const n = parseFloat(envioTexto);
+      if (!Number.isFinite(n) || n < 0) { avisar('El envío no es un número válido'); return false; }
+      envioCobradoCent = aCent(n);
+    }
+    const totalCent = aCent(precio) * cant + envioCobradoCent;
     // Mismo tope que las reglas: que el aviso salga aquí, claro, y no como un rechazo
     // genérico del servidor.
     if (totalCent >= MONTO_MAX_CENT) { avisar('El total pasa de un millón; revisa precio y cantidad'); return false; }
@@ -2648,6 +2709,28 @@ function abrirNuevoPedido(prefill = {}) {
     const origen = ORIGENES[$('f-origen').value] ? $('f-origen').value : 'otro';
     const folio = prefill.folio || nuevoFolio();
     if (!/^[A-Za-z0-9-]{4,40}$/.test(folio)) { avisar('El folio trae caracteres raros: ' + folio); return false; }
+    // ── el anticipo, si lo hubo ──────────────────────────────────
+    // Vacío o "0" significa que no dio nada. Cualquier otra cosa que no pase por
+    // montoEnCentavos() es un error de captura y hay que decirlo: si se tratara igual que
+    // vacío, un "-50" o un "abc" guardaría el pedido sin el anticipo y sin avisar.
+    let anticipo = null;
+    if (operaDinero()) {
+      const txt = ($('f-anticipo')?.value || '').trim();
+      const cero = txt !== '' && Number.isFinite(parseFloat(txt)) && parseFloat(txt) === 0;
+      if (txt !== '' && !cero) {
+        const montoCent = montoEnCentavos(txt);
+        if (montoCent === null) { avisar('El anticipo no es un monto válido'); return false; }
+        // El cobro es inmutable en cuanto se guarda; registrarlo en una cuenta que todavía
+        // no llegó del catálogo dejaría el dinero con dueño equivocado y sin arreglo.
+        if (!estado.cargado.cuentas) {
+          avisar('Se están cargando las cuentas: espera un momento o guarda el pedido sin anticipo');
+          return false;
+        }
+        const fechaAnt = $('f-anticipo-fecha').value;
+        if (!esFechaValida(fechaAnt)) { avisar('La fecha del anticipo no es válida'); return false; }
+        anticipo = {montoCent, cuenta: $('f-anticipo-cuenta').value, fecha: fechaAnt};
+      }
+    }
     // Todo el DOM se lee AQUÍ, antes de entrar a la transacción, y el id del renglón se
     // genera una sola vez: Firestore puede reejecutar el callback de runTransaction si
     // choca con otro escritor, y si adentro se releyera el DOM o se llamara nuevaOp() de
@@ -2661,6 +2744,12 @@ function abrirNuevoPedido(prefill = {}) {
       renglones: [{id: nuevaOp(), nombre: pieza, cantidad: cant,
                    precioUnitCent: aCent(precio), receta: []}],
       totalCent,
+      // Lo que valen las piezas, sin envío. Existe para que las reglas puedan comprobar
+      // que total = piezas + envío: no saben sumar una lista de renglones.
+      subtotalPiezasCent: aCent(precio) * cant,
+      // Guardado aparte del total para poder decir después "de esto, tanto fue envío" sin
+      // migrar nada. Un pedido local siempre lleva cero, no el campo ausente.
+      envioCobradoCent,
       estado: 'nuevo',
       entrega,
       ciudad: entrega === 'foraneo' ? $('f-ciudad').value.trim() : '',
@@ -2677,18 +2766,97 @@ function abrirNuevoPedido(prefill = {}) {
       // personas pegan el mismo mensaje de WhatsApp a la vez, la segunda ve que ya existe
       // y no lo duplica. Antes era addDoc con id al azar y la comprobación era en memoria.
       const ref = doc(db, RAIZ + '/pedidos', folio);
+      // El anticipo va en la MISMA transacción: o queda el pedido con su anticipo, o no
+      // queda nada. Un pedido guardado sin su anticipo se cobraría dos veces. El opId se
+      // generó al abrir el diálogo, así que un reintento reusa el mismo id de documento.
+      const refCobro = anticipo ? doc(db, RAIZ + '/cobros', opIdAnticipo) : null;
       await runTransaction(db, async tx => {
         const ya = await tx.get(ref);
         if (ya.exists()) throw new Error('folio-duplicado');
         tx.set(ref, datos);
+        if (anticipo) tx.set(refCobro, {
+          pedidoId: folio, tipo: 'pago', montoCent: anticipo.montoCent,
+          cuenta: anticipo.cuenta, fecha: anticipo.fecha,
+          registradoPor: estado.usuario.uid, opId: opIdAnticipo, creadoEn: serverTimestamp()
+        });
       });
-      avisar('Pedido guardado');
+      avisar(anticipo ? 'Pedido y anticipo guardados' : 'Pedido guardado');
     } catch (e) {
       console.error('alta pedido', e);
-      avisar(e.message === 'folio-duplicado' ? 'El pedido ' + folio + ' ya está registrado' : mensajeError(e));
+      // Si el commit sí llegó y la respuesta se perdió, el reintento ve el folio ocupado.
+      // Como pedido y anticipo son atómicos, el anticipo también quedó: hay que decirlo,
+      // porque si no la usuaria lo captura otra vez creyendo que se perdió.
+      avisar(e.message === 'folio-duplicado'
+        ? (anticipo ? 'El pedido ' + folio + ' ya estaba registrado, y su anticipo también'
+                    : 'El pedido ' + folio + ' ya está registrado')
+        : mensajeError(e));
       return false;
     }
   });
+
+  // ── el diálogo vivo: envío solo si hay envío, y el 50% siempre al día ──
+  const cajaEnvio = $('caja-envio');
+  const verEnvio = () => {
+    const hay = $('f-entrega').value === 'foraneo';
+    cajaEnvio.hidden = !hay;
+    // Si deja de ser envío, el importe se limpia: si no, un pedido local se guardaría con
+    // un envío escrito antes y cobrado de más sin que nadie lo vea.
+    if (!hay) $('f-envio').value = '';
+    calcularMitad();
+  };
+  // Lo que la clienta debe según lo capturado hasta ahora. Es solo para sugerir el 50%:
+  // el total de verdad se calcula al guardar.
+  function totalEnPantalla() {
+    const cant = Number($('f-cant').value);
+    const precio = parseFloat($('f-precio').value);
+    if (!Number.isInteger(cant) || cant < 1 || !Number.isFinite(precio) || precio < 0) return null;
+    const txtEnv = ($('f-envio')?.value || '').trim();
+    const env = parseFloat(txtEnv);
+    if ($('f-entrega').value === 'foraneo' && txtEnv !== '' && (!Number.isFinite(env) || env < 0)) {
+      // Un envío escrito mal no vale cero: al guardar va a frenar, así que el 50% sugerido
+      // no debe fingir que ya hay un total.
+      return null;
+    }
+    const envCent = $('f-entrega').value === 'foraneo' && Number.isFinite(env) && env >= 0 ? aCent(env) : 0;
+    return aCent(precio) * cant + envCent;
+  }
+  function calcularMitad() {
+    const el = $('f-mitad');
+    if (el) {
+      const t = totalEnPantalla();
+      el.textContent = t === null ? '—' : dinero(anticipoSugerido(t));
+    }
+    // El aviso depende del TOTAL tanto como del anticipo: si solo se recalculara al
+    // escribir el anticipo, bajar el precio después dejaba un sobrepago sin avisar.
+    revisarSobrepago();
+  }
+  // Que el anticipo pase del total se permite (un aviso nunca bloquea), pero se dice antes
+  // de guardar: casi siempre es un dedazo, y el cobro después ya no se edita.
+  function revisarSobrepago() {
+    const av = $('f-anticipo-aviso');
+    if (!av) return;
+    const c = montoEnCentavos($('f-anticipo').value);
+    const t = totalEnPantalla();
+    const exceso = c === null || t === null ? 0 : c - t;
+    av.hidden = exceso <= 0;
+    if (exceso > 0) av.textContent = 'Con eso el pedido queda pagado de más por ' +
+      dinero(exceso) + '. Se puede, pero revisa el monto.';
+  }
+  $('f-entrega').addEventListener('change', verEnvio);
+  ['f-cant','f-precio','f-envio'].forEach(id =>
+    $(id)?.addEventListener('input', calcularMitad));
+  $('btn-envio-sug')?.addEventListener('click', () => {
+    $('f-envio').value = (ENVIO_SUGERIDO_CENT / 100).toFixed(2);
+    calcularMitad();
+  });
+  $('btn-mitad')?.addEventListener('click', () => {
+    const t = totalEnPantalla();
+    if (t === null) { avisar('Primero pon la cantidad y el precio'); return; }
+    $('f-anticipo').value = (anticipoSugerido(t) / 100).toFixed(2);
+    revisarSobrepago();
+  });
+  $('f-anticipo')?.addEventListener('input', revisarSobrepago);
+  verEnvio();
 }
 $('btn-nuevo-pedido').addEventListener('click', () => abrirNuevoPedido());
 $('btn-inicio-pedido').addEventListener('click', () => { irA('pedidos'); abrirNuevoPedido(); });
@@ -2749,6 +2917,12 @@ function abrirPedido(id) {
           <div class="reng-meta">${dinero(r.precioUnitCent)} cada una</div></div>
         <div class="reng-lado monto">${dinero((r.precioUnitCent||0)*(r.cantidad||0))}</div>
       </div>`).join('')}
+      ${envioDe(p) > 0 ? `<div class="reng">
+        <div class="reng-cuerpo"><div class="reng-tit">envío</div>
+          <div class="reng-meta">${esc(p.ciudad || 'foráneo')}</div></div>
+        <div class="reng-lado monto">${dinero(envioDe(p))}</div></div>` : ''}
+      <div class="reng"><div class="reng-cuerpo"><b>total</b></div>
+        <div class="reng-lado monto">${dinero(p.totalCent)}</div></div>
       <div class="reng"><div class="reng-cuerpo"><b>ya pagó</b></div>
         <div class="reng-lado monto pos">${dinero(pagadoDe(p.id))}</div></div>
       <div class="reng"><div class="reng-cuerpo"><b>${saldo > 0 ? 'debe' : 'saldo'}</b></div>
@@ -2772,6 +2946,9 @@ function abrirPedido(id) {
       </li>`; }).join('') + `</ul>` : ''}
     ${saldo > 0 && operaDinero()
       ? `<button type="button" class="btn suave chico" data-pagar style="margin-bottom:12px">registrar un pago</button>` : ''}
+    ${operaDinero() && p.estado !== 'cancelado'
+      ? `<button type="button" class="btn linea chico" data-corregir-pedido
+           style="margin-bottom:12px">corregir el pedido</button>` : ''}
     <div class="campo"><label for="f-estado">estado</label>
       <select id="f-estado">${ESTADOS.map(e =>
         `<option value="${e}"${e === p.estado ? ' selected' : ''}>${e}</option>`).join('')}</select></div>
@@ -2798,6 +2975,8 @@ function abrirPedido(id) {
   }));
   const pagar = $('dlg-cuerpo').querySelector('[data-pagar]');
   if (pagar) pagar.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCobro(p.id), 60); });
+  const corr = $('dlg-cuerpo').querySelector('[data-corregir-pedido]');
+  if (corr) corr.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCorregirPedido(p.id), 60); });
 }
 
 // ── Escrituras de dinero: idempotentes ─────────────────────────
@@ -2878,6 +3057,155 @@ function dialogoCobro(pedidoId) {
     aviso.hidden = exceso <= 0;
     if (exceso > 0) aviso.textContent = 'Con esto el pedido queda sobrepagado por ' + dinero(exceso) + '. Se puede, pero revisa el monto.';
   });
+}
+
+// ── Corregir el pedido: precio, pieza y envío, con auditoría ───
+// Beto lo pidió el 7-sep-2026, el primer día de uso: "que los mismos pedidos los puedas
+// EDITAR". Hasta hoy `totalCent` y `renglones` eran inmutables en las reglas por un caso
+// de Codex: pedido de $1,500 con $500 pagados, alguien baja el total a $500 y el pedido
+// desaparece de "cuentas" con $1,000 sin cobrar y SIN QUE NADA LO MUESTRE. Ese caso sigue
+// siendo real; lo que cambia es que ahora deja rastro: cada corrección escribe un
+// documento en `pedidosCambios` con el antes, el después, quién y cuándo, EN LA MISMA
+// TANDA que el cambio, y las reglas no aceptan el update sin él. Un precio mal capturado
+// ya no obliga a cancelar y recapturar, y lo que se movió se puede auditar después.
+function dialogoCorregirPedido(pedidoId) {
+  const p = estado.pedidos.find(x => x.id === pedidoId);
+  if (!p) return;
+  if (!operaDinero()) { avisar('Las correcciones las hace quien maneja el dinero'); return; }
+  // El botón no se pinta en un pedido cancelado, pero el detalle pudo quedar abierto desde
+  // antes de cancelarlo (dos pestañas, otra persona). Corregir el precio de algo cancelado
+  // no tiene sentido y las reglas no lo distinguen.
+  if (p.estado === 'cancelado') { avisar('Este pedido está cancelado: no se corrige'); return; }
+  // Sin los cobros cargados no se puede avisar de que el nuevo total queda por debajo de
+  // lo ya pagado, que es justo el aviso que importa.
+  if (!estado.cargado.cobros) { avisar('Espera un momento, se están cargando los pagos'); return; }
+  // Este diálogo edita UN renglón, que es lo que el alta crea hoy. Si un pedido llegara a
+  // tener varios, guardar aquí borraría los demás y sus recetas: mejor no ofrecerlo.
+  if ((p.renglones || []).length > 1) {
+    avisar('Este pedido tiene varias piezas y todavía no se puede corregir aquí; dile a Beto');
+    return;
+  }
+  const r = (p.renglones || [])[0] || {};
+  const pagado = pagadoDe(p.id);
+  const opId = nuevaOp();
+  abrirDialogo('Corregir el pedido', `
+    <p class="nota" style="margin-bottom:12px">${esc(p.folio)} · ${esc(p.cliente?.nombre || '')}
+      ${pagado > 0 ? `· ya pagó <b>${dinero(pagado)}</b>` : '· sin pagos todavía'}</p>
+    <p class="nota" style="margin-bottom:12px">Queda registrado quién corrigió, cuándo y qué
+      decía antes. Los pagos no se tocan: si el total baja de lo ya pagado, el pedido queda
+      sobrepagado y hay que devolver la diferencia o corregir el pago.</p>
+    <div class="campo"><label for="c-cliente">de quién es</label>
+      <input type="text" id="c-cliente" maxlength="60" value="${esc(p.cliente?.nombre || '')}"></div>
+    <div class="campo"><label for="c-pieza">qué le vas a hacer</label>
+      <input type="text" id="c-pieza" maxlength="60" value="${esc(r.nombre || '')}"></div>
+    <div class="fila2">
+      <div class="campo"><label for="c-cant">cuántas</label>
+        <input type="number" id="c-cant" min="1" step="1" inputmode="numeric" value="${Number(r.cantidad) || 1}"></div>
+      <div class="campo"><label for="c-precio">precio por pieza</label>
+        <input type="number" id="c-precio" step="0.01" min="0" inputmode="decimal"
+          value="${((Number(r.precioUnitCent) || 0) / 100).toFixed(2)}"></div>
+    </div>
+    <div class="campo"><label for="c-envio">envío que le cobras</label>
+      <input type="number" id="c-envio" step="0.01" min="0" inputmode="decimal"
+        value="${(envioDe(p) / 100).toFixed(2)}"
+        ${p.entrega === 'foraneo' ? '' : 'disabled'}></div>
+    ${p.entrega === 'foraneo' ? '' :
+      `<p class="nota" style="margin:-8px 0 12px">Este pedido es de recoger en Puebla, por eso
+        el envío va en cero. El tipo de entrega no se cambia aquí.</p>`}
+    <p class="nota" id="c-total" style="margin-bottom:12px"></p>
+    <p class="aviso falta" id="c-aviso" hidden style="margin-bottom:12px"></p>
+    <div class="campo"><label for="c-motivo">¿por qué lo corriges?</label>
+      <input type="text" id="c-motivo" maxlength="120" placeholder="me equivoqué al capturar el precio..."></div>
+    <button class="btn" data-guardar style="width:100%">guardar la corrección</button>
+  `, async () => {
+    const nombre = $('c-cliente').value.trim();
+    const pieza = $('c-pieza').value.trim();
+    const cant = Number($('c-cant').value);
+    const precio = parseFloat($('c-precio').value);
+    const motivo = $('c-motivo').value.trim();
+    if (!nombre) { avisar('Ponle el nombre de la clienta'); return false; }
+    if (!pieza) { avisar('Escribe qué pieza es'); return false; }
+    if (!Number.isInteger(cant) || cant < 1) { avisar('La cantidad debe ser un número entero'); return false; }
+    if (!Number.isFinite(precio) || precio < 0) { avisar('Escribe el precio por pieza'); return false; }
+    if (!motivo) { avisar('Escribe por qué lo corriges: es lo que queda registrado'); return false; }
+    let envioCent = 0;
+    if (p.entrega === 'foraneo') {
+      const n = parseFloat($('c-envio').value);
+      if (!Number.isFinite(n) || n < 0) { avisar('El envío no es un número válido'); return false; }
+      envioCent = aCent(n);
+    }
+    const totalCent = aCent(precio) * cant + envioCent;
+    if (totalCent >= MONTO_MAX_CENT) { avisar('El total pasa de un millón; revisa precio y cantidad'); return false; }
+    // El renglón conserva su id: es el mismo renglón corregido, no uno nuevo, y así la
+    // receta de materiales que cuelgue de él no se queda huérfana.
+    const renglones = [{
+      id: r.id || nuevaOp(), nombre: pieza, cantidad: cant,
+      precioUnitCent: aCent(precio), receta: Array.isArray(r.receta) ? r.receta : []
+    }];
+    try {
+      const b = writeBatch(db);
+      b.update(doc(db, RAIZ + '/pedidos', p.id), {
+        cliente: {nombre, tel: p.cliente?.tel || ''},
+        renglones, totalCent, subtotalPiezasCent: aCent(precio) * cant,
+        envioCobradoCent: envioCent,
+        // El pedido apunta a su corrección: es como las reglas encuentran el rastro y
+        // comprueban que dice los mismos números que el pedido.
+        correccionOpId: opId
+      });
+      // La auditoría va en la MISMA tanda y las reglas la exigen: sin ella el update se
+      // rechaza, así que no puede haber una corrección sin su rastro.
+      b.set(doc(db, RAIZ + '/pedidosCambios', opId), {
+        pedidoId: p.id, opId, motivo,
+        antes: {totalCent: p.totalCent || 0, envioCobradoCent: envioDe(p),
+                renglones: Array.isArray(p.renglones) ? p.renglones : [],
+                cliente: p.cliente?.nombre || ''},
+        despues: {totalCent, envioCobradoCent: envioCent, renglones, cliente: nombre},
+        pagadoAlCorregir: pagado,
+        corregidoPor: estado.usuario.uid, fecha: hoyISO(), creadoEn: serverTimestamp()
+      });
+      await b.commit();
+      avisar('Pedido corregido');
+    } catch (e) {
+      console.error('corregir pedido', e);
+      // Si la tanda sí llegó y la respuesta se perdió, el pedido ya trae este opId. Sin
+      // esta comprobación el mensaje decía "no se pudo guardar" sobre una corrección que
+      // sí quedó, y quien la hizo la repetía o la daba por perdida.
+      const ya = await getDoc(doc(db, RAIZ + '/pedidos', p.id)).catch(() => null);
+      if (ya?.exists() && ya.data().correccionOpId === opId) {
+        avisar('Esa corrección ya había quedado guardada');
+        return;
+      }
+      // Si el pedido cambió mientras este diálogo estaba abierto, las reglas rechazan la
+      // corrección porque el "antes" que se capturó ya no es el del servidor. Eso está
+      // bien —no se pisa el cambio de nadie— pero el mensaje genérico habla de permisos y
+      // hace pensar en un problema de cuenta.
+      if (ya?.exists() && ya.data().totalCent !== p.totalCent) {
+        avisar('Alguien más corrigió este pedido hace un momento. Ciérralo, ábrelo otra vez y revisa antes de corregir');
+        return false;
+      }
+      avisar(mensajeError(e));
+      return false;
+    }
+  });
+  // El total y el aviso de "queda por debajo de lo pagado" se recalculan mientras escribe:
+  // el momento de enterarse es antes de guardar, no después.
+  const repasar = () => {
+    const cant = Number($('c-cant').value);
+    const precio = parseFloat($('c-precio').value);
+    const env = parseFloat($('c-envio').value);
+    const envCent = p.entrega === 'foraneo' && Number.isFinite(env) && env >= 0 ? aCent(env) : 0;
+    const ok = Number.isInteger(cant) && cant >= 1 && Number.isFinite(precio) && precio >= 0;
+    const total = ok ? aCent(precio) * cant + envCent : null;
+    $('c-total').innerHTML = total === null ? 'Total: —'
+      : `Total: <b>${dinero(total)}</b>${pagado > 0 ? ` · ya pagó ${dinero(pagado)} · quedaría
+         ${total - pagado >= 0 ? 'debiendo' : 'sobrepagado por'} <b>${dinero(Math.abs(total - pagado))}</b>` : ''}`;
+    const av = $('c-aviso');
+    av.hidden = !(total !== null && pagado > 0 && total < pagado);
+    if (!av.hidden) av.textContent = 'Ojo: el nuevo total es menor que lo que ya te pagaron. ' +
+      'El pedido va a quedar sobrepagado y esa diferencia hay que devolverla o corregir el pago.';
+  };
+  ['c-cant','c-precio','c-envio'].forEach(id => $(id).addEventListener('input', repasar));
+  repasar();
 }
 
 // ── Corregir un pago: la única corrección posible ──────────────

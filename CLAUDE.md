@@ -61,7 +61,7 @@ Estas ya costaron caro en `mi-cartera` y en las apps de la fábrica. No re-descu
 
 | Hueco | Por qué detiene |
 |---|---|
-| **Cómo registra hoy sus ventas** | Quedó en mandar un ejemplo y no ha llegado. Sin eso, el catálogo de piezas y de materiales lo estaría inventando yo |
+| ~~**Cómo registra hoy sus ventas**~~ | **Resuelto el 7-sep-2026**: llegaron fotos del cuaderno. Cobros como *monto · clienta · fecha (+ hora del comprobante)* bajo "Banbajío depósitos"; gastos como *monto · concepto · fecha*, mezclando material con pagos a personas (Vic, Eli, Gaby); cierre periódico *entró − gastos = entregado a Gaby Nu*. Detalle en la nota SAGA del proyecto |
 | **Precios por tipo de pieza y tamaño** | Sin precio no hay total, y sin total no hay "cuánto me deben" |
 | **Tiempo de elaboración por pieza** | Es lo que falta para que la prioridad sea real y no una estimación |
 | **Anticipo: si lo pide y de cuánto** | Ella misma dijo que a veces no cobra |
@@ -70,13 +70,24 @@ Estas ya costaron caro en `mi-cartera` y en las apps de la fábrica. No re-descu
 
 ## Estado
 
-🔴 **En construcción.** Junta con Gaby y Marcela el **miércoles 2 de septiembre de 2026,
-5 de la tarde**.
+✅ **En producción y vendida** (5-sep-2026, $3,500, gestión sola). Empiezan a usarla el lunes
+7 de septiembre de 2026.
+
+## Elita pasó de `apoyo` a `socia` (7-sep-2026)
+
+El primer día de uso Elita mandó un video: no encontraba dónde meter en "salió" la compra
+de servilletas ni dónde registrar el anticipo de una clienta ("sale debe 750 y no veo
+dónde poner que ya pagó"). No era una falta de la app —los pagos parciales y los gastos
+existen— sino el rol: `apoyo` no ve "registrar pago" ni "+ gasto". En la práctica ella sí
+opera cobros y compras, así que se le dio `socia` (en `sembrar-miembros.mjs`; se aplica con
+`node sembrar-miembros.mjs`). El rol se lee al entrar (`getDoc` en el login): hay que cerrar
+sesión y volver a entrar para que aparezcan los botones. Con esto el hueco
+"[POR CONFIRMAR] si Elita ve el dinero" queda resuelto por los hechos: sí lo ve y lo mueve.
 
 ## La pestaña "mi página" (31-ago-2026)
 
 Esta app también es el **editor de la página pública**. Gaby y Marcela cambian
-ahí los textos y las fotos del sitio y le dan a publicar; Elita (`apoyo`) no ve
+ahí los textos y las fotos del sitio y le dan a publicar; el rol `apoyo` (hoy nadie; Elita fue `apoyo` hasta el 7-sep) no ve
 esa pestaña, y las reglas la bloquean aunque intentara escribir por SDK.
 
 Cómo está armado, para no re-discutirlo:
@@ -170,7 +181,7 @@ punta y esto es lo que quedó, para no re-discutirlo:
 - **Gastos: `update` cerrado, `delete` solo dueña y con lápida** en `gastosBorrados` (misma
   tanda atómica). No son libro inmutable por decisión ya escrita arriba, pero borrar sin
   rastro descuadraba cierres ya vistos.
-- **La interfaz espeja los roles** (`operaDinero()`, `esDuena()` del cliente): Elita no ve
+- **La interfaz espeja los roles** (`operaDinero()`, `esDuena()` del cliente): un `apoyo` no ve
   "registrar pago", "+ gasto", "corregir" ni el costo de una compra. No es seguridad —eso son
   las reglas—, es no enseñar un botón que va a fallar.
 - **Origen del pedido** (`origen`: instagram · anuncio · recomendacion · pagina · repite ·
@@ -179,6 +190,65 @@ punta y esto es lo que quedó, para no re-discutirlo:
 - Barato pero real: "cargando" ya no se ve como "no hay nada"; `pintarTodo()` atrapa un dato
   corrupto y lo dice en pantalla; al volver la señal se reengancha `escuchar()`; `.btn` con
   `min-height:44px`.
+
+## Envío cobrado, anticipo en el alta y corrección del pedido (7-sep-2026)
+
+Primer día de uso real. Beto pidió tres cosas el mismo día y las tres entraron juntas
+porque son el mismo momento de captura: *"cuando es con envío, esos ciento cincuenta pesos
+están dados"*, *"que pueda decir que el adelanto... pedimos cincuenta por ciento de
+anticipo, y decidan a qué cuenta se lo envían"*, y *"que los mismos pedidos los puedas
+EDITAR"*. Lo que quedó, para no re-discutirlo:
+
+- **El envío que paga la clienta es `envioCobradoCent`, y NO es el gasto de la guía.** Son
+  dos cifras distintas: la guía sigue siendo un gasto de categoría `envio`. Va dentro de
+  `totalCent` (es lo que ella debe) pero guardado aparte, para poder decir después cuánto
+  fue trabajo y cuánto paquetería trasladada.
+- **Los $150 NO se prellenan.** Es lo que Beto dijo que se cobra, no una tarifa confirmada
+  con la clienta, y un total mal capturado antes obligaba a cancelar y recapturar. Se
+  ofrece con un botón *usar $150.00* y quien captura decide. Ganó Codex el argumento.
+- **El campo de envío solo existe si la entrega es foránea**, y al cambiar a "recoge en
+  Puebla" se limpia: si no, un importe escrito antes se cobraba de más sin que nadie lo
+  viera. Las reglas también lo exigen (`envioValido()`).
+- **El anticipo se captura en el alta**, con su cuenta y su fecha (editable: si el depósito
+  llegó ayer, forzarlo a hoy falsea el cierre de la semana). Se guarda como un pago normal
+  en `cobros`, así que se corrige con la reversión de siempre. **Va en la MISMA
+  transacción que el pedido**: o quedan los dos o ninguno, porque un pedido guardado sin su
+  anticipo se cobra dos veces. Por eso `pedidoExiste()` en las reglas pasó de `exists()` a
+  `existsAfter()`.
+- **El 50% sugerido es la mitad del total, envío incluido**, redondeada con `Math.round`.
+  El botón lo pone; el campo nunca se llena solo.
+- **Vacío no es lo mismo que inválido.** Un anticipo vacío o en cero significa que no dio
+  nada; un `-50` o un `abc` es un error de captura y se avisa. Con `montoEnCentavos()` a
+  secas los tres casos eran `null` y el pedido se guardaba sin el anticipo, en silencio.
+- **`totalCent` y `renglones` ya NO son inmutables: son corregibles CON RASTRO.** El caso
+  que ganó Codex el 4-sep sigue siendo real (bajar el total deja el pedido sobrepagado),
+  pero ya no es invisible. Cada corrección escribe un documento en `pedidosCambios` con el
+  antes, el después, el motivo, quién, cuándo y cuánto se había pagado, **en la misma tanda
+  que el cambio**, y las reglas rechazan el update sin él.
+- **La auditoría tiene que ser NUEVA y tiene que cuadrar.** `!exists() && existsAfter()`
+  prueba que nació en esa tanda: sin eso se podía sembrar una auditoría hoy y usarla
+  mañana, o reusar la de un ida y vuelta $100 → $200 → $100 (hallazgo crítico de Codex).
+  Y `auditoriaCuadra()` amarra en las dos direcciones total, envío, renglones y cliente.
+  La reciprocidad se cierra desde `pedidosCambios`: el pedido tiene que quedar apuntando a
+  esa auditoría y con su mismo total.
+- **Listas blancas en el update de pedidos.** La rama de todos los días solo deja tocar
+  `estado` y `fechaComprometida`; la de corrección, los cinco campos del dinero más
+  `correccionOpId`. Antes, por SDK, cualquier miembro podía cambiar el cliente, las notas o
+  `creadoPor`.
+- **`subtotalPiezasCent`** existe solo para que las reglas puedan exigir
+  `total == piezas + envío`: no saben sumar una lista de renglones de largo variable.
+- **La corrección edita un solo renglón** y rechaza los pedidos que tengan varios, porque
+  reemplazaría el arreglo entero y perdería los demás con sus recetas. El alta hoy siempre
+  crea uno.
+- **"Vendiste" incluye el envío** —es lo que la clienta debe— pero la tarjeta lo dice y
+  muestra aparte cuánto fue de piezas. Un mes con muchos foráneos inflaba la cifra sin que
+  se notara.
+
+**Riesgo aceptado:** no se exige `creadoEn == request.time` en la auditoría. Amarrarlo
+evitaría fechar el rastro en otro día, pero si `serverTimestamp()` no resolviera exactamente
+a `request.time` toda corrección quedaría bloqueada, y eso no se puede comprobar sin
+emulador. Falsear esa fecha exige un cliente manipulado por una de las tres personas del
+negocio, y el cambio en sí ya no se puede ocultar.
 
 **Riesgos aceptados a conciencia:** el reintento tras recargar la página no es idempotente
 (el `opId` se pierde con la recarga); `fechaValida` de las reglas deja pasar el 31 de febrero
