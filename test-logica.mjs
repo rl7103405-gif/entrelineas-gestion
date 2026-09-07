@@ -37,7 +37,10 @@ const api = new Function('estado', fuente + `
           textoDelta, textoBalance, gastosParaPastel, rebanadas, arcosDonut,
           movimientosDe, agruparPorDia, limitarPorDias, montoCobro, porCuentaDe,
           // envio cobrado y anticipo en el alta (7-sep-2026)
-          envioDe, piezasDe, anticipoSugerido, ENVIO_INICIAL_CENT, envioSugerido};
+          envioDe, piezasDe, anticipoSugerido, ENVIO_INICIAL_CENT, envioSugerido,
+          // etapas por pedido y filtros (7-sep-2026, noche)
+          ETAPAS_DEFAULT, ETAPAS_MAX, FILTROS_PEDIDOS_DEFAULT, catalogoEtapas, plantillaEtapas,
+          etapasDe, progresoEtapas, filtrarPedidos, hayFiltrosActivos};
 `);
 
 // ── utilidades de prueba ───────────────────────────────────────
@@ -578,6 +581,103 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
   const t4 = api({pedidos: [local], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
   chk('un pedido local con envio lo reporta igual', t4.envioDe(local) === 25000);
   chk('y sus piezas son el total menos ese envio', t4.piezasDe(local) === 75000);
+}
+
+// -- etapas por pedido (7-sep-2026) --------------------------------
+// Viven en cada pedido, con id estable. El catalogo es solo la plantilla.
+{
+  const vacio = {pedidos: [], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []};
+  const t = api(vacio);
+  chk('sin catalogo cargado vale el default de cinco', t.catalogoEtapas().length === 5 && t.catalogoEtapas()[0].id === 'e_fondo');
+  const pl = t.plantillaEtapas();
+  chk('la plantilla copia todas sin hacer', Object.keys(pl).length === 5 && Object.values(pl).every(e => e.hecha === false && e.nombre));
+
+  const ped = {etapas: {e_marco: {nombre:'marco listo', hecha:true}, e_fondo: {nombre:'fondo listo', hecha:false},
+                        e_vieja: {nombre:'etapa que ya no esta', hecha:true}}};
+  const e = t.etapasDe(ped);
+  chk('se ordenan como el catalogo y las ajenas al final', e.map(x => x.id).join(',') === 'e_fondo,e_marco,e_vieja');
+  chk('una etapa borrada del catalogo sigue contando en el pedido', e.some(x => x.id === 'e_vieja' && x.hecha));
+  const pr = t.progresoEtapas(ped);
+  chk('el progreso es contra las etapas DEL pedido, no del catalogo', pr.total === 3 && pr.hechas === 2 && !pr.completo);
+  chk('la siguiente pendiente es la primera sin hacer en orden', pr.siguiente && pr.siguiente.id === 'e_fondo');
+
+  chk('sin etapas no hay fraccion', t.progresoEtapas({}).total === 0 && t.progresoEtapas({etapas: null}).total === 0);
+  chk('todas hechas = completo', t.progresoEtapas({etapas: {e_a: {nombre:'a', hecha:true}}}).completo === true);
+  chk('hecha solo cuenta si es exactamente true',
+      t.progresoEtapas({etapas: {e_a: {nombre:'a', hecha:'true'}, e_b: {nombre:'b', hecha:1}}}).hechas === 0);
+  chk('entradas corruptas se ignoran sin tronar',
+      t.etapasDe({etapas: {e_a: null, e_b: 'x', e_c: {hecha:true}, e_d: {nombre:'  ', hecha:true}, e_e: {nombre:'ok', hecha:true}}}).length === 1);
+  // un id con punto se leeria bien pero al escribir 'etapas.e_mala.ruta.hecha' Firestore
+  // lo tomaria como ruta anidada y tocaria otra cosa: no debe ni aparecer
+  chk('un id con punto se ignora', t.etapasDe({etapas: {'e_mala.ruta': {nombre:'x', hecha:true}}}).length === 0);
+  chk('un id sin el prefijo se ignora', t.etapasDe({etapas: {fondo: {nombre:'x', hecha:true}}}).length === 0);
+  chk('un id vacio o larguisimo se ignora',
+      t.etapasDe({etapas: {'': {nombre:'x', hecha:true}, ['e_' + 'z'.repeat(40)]: {nombre:'y', hecha:true}}}).length === 0);
+  chk('un nombre enorme se recorta al leer',
+      t.etapasDe({etapas: {e_x: {nombre: 'n'.repeat(5000), hecha:false}}})[0].nombre.length === 60);
+  chk('un arreglo en vez de mapa se trata como vacio', t.etapasDe({etapas: [{nombre:'x', hecha:true}]}).length === 0);
+  const muchas = {}; for (let i = 0; i < 20; i++) muchas['e_' + i] = {nombre: 'e' + i, hecha: false};
+  chk('nunca se leen mas de ETAPAS_MAX', t.etapasDe({etapas: muchas}).length === t.ETAPAS_MAX);
+
+  // con catalogo propio en estado: manda el catalogo, y el orden es el suyo
+  const t2 = api({...vacio, catalogo: {etapas: [{id:'e_b', nombre:'B'}, {id:'e_a', nombre:'A'}]}});
+  chk('con catalogo cargado, la plantilla es la del catalogo', Object.keys(t2.plantillaEtapas()).join(',') === 'e_b,e_a');
+  chk('y el orden de las etapas del pedido sigue al catalogo',
+      t2.etapasDe({etapas: {e_a: {nombre:'A', hecha:false}, e_b: {nombre:'B', hecha:false}}}).map(x => x.id).join(',') === 'e_b,e_a');
+}
+
+// -- filtros de la lista de pedidos (7-sep-2026) --------------------
+{
+  const hoy = new Date('2026-09-07T12:00:00');   // lunes
+  const mk = (id, extra) => ({id, folio: id, estado: 'nuevo', entrega: 'local', totalCent: 1, renglones: [], ...extra});
+  const pedidos = [
+    mk('vencido',  {fechaComprometida: '2026-09-04'}),
+    mk('hoy',      {fechaComprometida: '2026-09-07', origen: 'anuncio'}),
+    mk('pronto',   {fechaComprometida: '2026-09-10'}),   // jueves: 3 dias habiles
+    mk('mes',      {fechaComprometida: '2026-09-25', origen: 'instagram',
+                    etapas: {e_fondo: {nombre:'fondo listo', hecha:true}, e_marco: {nombre:'marco listo', hecha:false}}}),
+    // foraneo: fechaOperativa() le resta 3 dias habiles, y sigue con tiempo de sobra
+    mk('lejos',    {fechaComprometida: '2026-11-02', entrega: 'foraneo', etapas: {e_fondo: {nombre:'fondo listo', hecha:true}}}),
+    mk('sinfecha', {fechaComprometida: null}),
+    mk('entregado',{fechaComprometida: '2026-09-01', estado: 'entregado'}),
+    mk('cancelado',{fechaComprometida: '2026-09-01', estado: 'cancelado'})
+  ];
+  const t = api({pedidos, cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  const D = t.FILTROS_PEDIDOS_DEFAULT;
+  const ids = (f, todos) => t.filtrarPedidos(t.pedidosOrdenados(todos), {...D, ...f}, hoy).map(x => x.p.id).sort().join(',');
+
+  chk('sin filtros = solo abiertos, como siempre', ids({}) === 'hoy,lejos,mes,pronto,sinfecha,vencido');
+  chk('el default no cuenta como filtro activo', t.hayFiltrosActivos({...D}) === false && t.hayFiltrosActivos({...D, entrega:'local'}) === true);
+  chk('estado=todos incluye entregados y cancelados', ids({estado:'todos'}, true).split(',').length === 8);
+  chk('estado=entregado', ids({estado:'entregado'}, true) === 'entregado');
+  chk('solo foraneos', ids({entrega:'foraneo'}) === 'lejos');
+  chk('solo Puebla', ids({entrega:'local'}) === 'hoy,mes,pronto,sinfecha,vencido');
+  chk('urgentes = sin fecha, vencidos, hoy/manana', ids({urgencia:'urgente'}) === 'hoy,sinfecha,vencido');
+  chk('proximos 3 dias', ids({urgencia:'pronto'}) === 'pronto');
+  chk('con tiempo', ids({urgencia:'tranquilo'}) === 'lejos,mes');
+  chk('se entregan esta semana (lunes 7 a domingo 13)', ids({cuando:'semana'}) === 'hoy,pronto');
+  chk('se entregan este mes', ids({cuando:'mes'}) === 'hoy,mes,pronto,vencido');
+  chk('vencidos', ids({cuando:'vencidos'}) === 'vencido');
+  // 'vencido' es la fecha PROMETIDA, no la operativa: un foraneo que se entrega en 3 dias
+  // ya deberia haber salido del taller, pero NO esta vencido para la clienta
+  {
+    const f = mk('f', {fechaComprometida: '2026-09-08', entrega: 'foraneo'});
+    const tf = api({pedidos: [f], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+    chk('un foraneo que ya debio salir no cuenta como vencido',
+        tf.filtrarPedidos(tf.pedidosOrdenados(), {...D, cuando:'vencidos'}, hoy).length === 0);
+    chk('...pero si sale como urgente', tf.filtrarPedidos(tf.pedidosOrdenados(), {...D, urgencia:'urgente'}, hoy).length === 1);
+  }
+  chk('sin fecha confirmada', ids({cuando:'sinfecha'}) === 'sinfecha');
+  chk('por origen', ids({origen:'anuncio'}) === 'hoy');
+  chk('origen desconocido cae en otro', ids({origen:'otro'}) === 'lejos,pronto,sinfecha,vencido');
+  chk('con etapas pendientes', ids({etapa:'incompletos'}) === 'mes');
+  chk('con todas las etapas', ids({etapa:'completos'}) === 'lejos');
+  chk('falta una etapa concreta', ids({etapa:'falta:e_marco'}) === 'mes');
+  chk('falta una etapa que el pedido no tiene: no aparece', ids({etapa:'falta:e_armado'}) === '');
+  chk('los filtros se combinan', ids({entrega:'local', urgencia:'tranquilo'}) === 'mes');
+  // un foraneo para dentro de 3 dias cae en 'hoy o manana' por los dias de paqueteria
+  const t3 = api({pedidos: [mk('f3', {fechaComprometida: '2026-09-10', entrega: 'foraneo'})], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  chk('un foraneo a 3 dias es urgente, no proximo', t3.filtrarPedidos(t3.pedidosOrdenados(), {...D, urgencia:'urgente'}, hoy).length === 1);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total

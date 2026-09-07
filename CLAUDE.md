@@ -265,6 +265,63 @@ a `request.time` toda corrección quedaría bloqueada, y eso no se puede comprob
 emulador. Falsear esa fecha exige un cliente manipulado por una de las tres personas del
 negocio, y el cambio en sí ya no se puede ocultar.
 
+## Etapas del proceso y filtros de la lista (7-sep-2026, noche)
+
+Elita, en un audio del primer día: *"poder poner fondo listo, marco listo, figuras listas…
+etiquetas al mismo pedido para saber cómo va"*. Y Beto, después: *"filtrar por varios: de
+dónde son, cuándo se entrega, en qué urgencia, si son de Puebla o de otro estado"*. Codex
+cambió el diseño de las etapas antes de escribirlo, y no se re-discute:
+
+- **Las etapas viven EN CADA PEDIDO, no en un catálogo global.** Unas servilletas no llevan
+  "marco listo"; un "3 de 5" contra un catálogo ajeno sería mentira. `config/etapas` es
+  solo la plantilla que se copia al pedido al crearlo (`plantillaEtapas()`); desde ahí cada
+  pedido es dueño de las suyas y se agregan o quitan una por una. Los pedidos que ya
+  existían no tienen etapas: en su detalle hay un botón *poner las etapas de siempre*.
+- **Cada etapa tiene un ID ESTABLE** (`e_fondo`, `e_` + opId para las nuevas), nunca su
+  nombre ni su posición. Renombrarla en el catálogo no desconecta las marcas viejas. El
+  pedido guarda también el nombre como respaldo: una etapa borrada del catálogo **sigue
+  contando** en los pedidos que ya la tenían.
+- **Se guarda campo por campo**: `etapas.<id>.hecha` con `updateDoc`, `deleteField()` para
+  quitar, nunca el mapa entero. Dos personas marcando etapas distintas del mismo pedido se
+  fusionan. Cada marca se guarda al instante, sin "guardar cambios".
+- **El detalle solo manda lo que cambió** (`estado`, `fechaComprometida`). Hallazgo de Codex
+  sobre un bug viejo: si Elita abría el pedido en "nuevo", Gaby lo pasaba a "proceso" y
+  Elita solo movía la fecha, el guardado lo regresaba a "nuevo".
+- **Todas las etapas hechas NO cambia el estado solo.** Aparece un aviso dentro del diálogo
+  con un botón que mueve el `<select>` a "listo"; guardar sigue siendo de la persona. Un
+  pedido "listo" al que le desmarcan una etapa muestra la inconsistencia, no se degrada.
+- **`etapasDe()` sanea al leer**: las reglas solo pueden exigir que `etapas` sea un mapa de
+  hasta 12 (`etapasValidas()`), no mirar dentro. Una entrada sin nombre, con `hecha` que no
+  sea exactamente `true`, o un arreglo en vez de mapa, se ignoran sin tronar.
+- **El catálogo se edita por renglones** (input + quitar + agregar), no con el textarea de
+  cuentas: un textarea no distingue "renombré" de "borré una y agregué otra", y aquí el id
+  importa. Cualquier miembro marca etapas (es trabajo de taller, no dinero); el catálogo lo
+  cambia la dueña. Borrar `config/etapas` equivale a volver a las cinco de siempre.
+- **El repintado de etapas comprueba la generación del diálogo.** El `<dialog>` es único y
+  `#etapas-pedido` existe en cualquier pedido abierto: marcar una etapa en A, cerrar y abrir
+  B antes de que respondiera el servidor repintaba el cuerpo de B con las etapas de A y
+  reenganchaba las casillas contra A — la siguiente palomita escribía en el pedido
+  equivocado, sin error visible. Lo cazaron Codex y `code-reviewer` por separado.
+  `engancharEtapas()` guarda `generacionDialogo`, el nodo y el `pedidoId`, y exige los tres.
+- **`etapasDe()` valida el id con `/^e_[A-Za-z0-9]{1,30}$/` y recorta el nombre a 60 al
+  LEER.** Un `e_mala.ruta` escrito por SDK se leería bien, pero al marcarlo
+  `etapas.e_mala.ruta.hecha` tocaría otra cosa (el punto separa rutas en Firestore); y un
+  nombre de varios KB rompería la pantalla de las tres. Las reglas no pueden mirar dentro
+  del mapa, así que el saneo al leer es la única defensa.
+- **Corregir el tipo de entrega y la ciudad** *(Elita, 7-sep: capturó como Puebla un pedido
+  que era para la Ciudad de México)*. Va por el camino auditado: no es dinero, pero cambia
+  la urgencia por los días de paquetería, y la auditoría amarra `entrega` y `ciudad` en las
+  dos direcciones igual que el total.
+- **Filtros**: `filtrarPedidos(items, f, hoy)` es puro y recibe `hoy` para probarse. Seis
+  `<select>` (estado · Puebla/foráneo · urgencia · cuándo se entrega · origen · etapa), y
+  el valor vive en `filtrosPedidos`, no en el DOM, para sobrevivir al repintado. Con
+  "estado" en algo distinto de *abiertos* se incluyen entregados y cancelados. "Urgentes"
+  son los rangos 0–3 de `urgencia()`, así que **un foráneo para dentro de 3 días es
+  urgente**, no próximo: la paquetería le come los días.
+- **"Vencidos" es la fecha PROMETIDA, no la operativa.** Usar `u.dias` (que a un foráneo le
+  resta los 3 días) hacía salir como vencido un pedido que se entrega en tres días solo
+  porque ya debió salir del taller. Eso es urgencia, y para eso está el otro filtro.
+
 **Riesgos aceptados a conciencia:** el reintento tras recargar la página no es idempotente
 (el `opId` se pierde con la recarga); `fechaValida` de las reglas deja pasar el 31 de febrero
 (la app lo frena); las credenciales de `verificar-reglas.mjs` viven en claro en el disco de

@@ -97,6 +97,14 @@ label{display:block;font-size:12.5px;font-weight:500;color:var(--tinta-suave);ma
 .chip{border:1px solid var(--rosa-borde);background:none;color:var(--rosa-hondo);
   border-radius:999px;padding:6px 14px;font-size:13px;font-weight:500}
 .chip[aria-pressed="true"]{background:var(--rosa-fuerte);color:var(--blanco);border-color:var(--rosa-fuerte)}
+.filtros select{font-size:13px;padding:6px 10px;border-radius:999px;border:1px solid var(--rosa-borde);
+  background:var(--blanco);color:var(--rosa-hondo);max-width:100%}
+.filtros select.activo{background:var(--rosa-fuerte);color:var(--blanco);border-color:var(--rosa-fuerte)}
+.etapa{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--hueso)}
+.etapa input[type=checkbox]{width:22px;height:22px;accent-color:var(--rosa-fuerte);flex:none}
+.etapa label{flex:1;font-size:15px}
+.etapa.hecha label{color:var(--gris);text-decoration:line-through}
+.etapa .quitar{background:none;border:0;color:var(--gris);font-size:18px;padding:2px 8px;cursor:pointer}
 .nav-periodo{background:none;border:1px solid var(--arena);border-radius:10px;
   padding:6px 12px;font-size:15px;color:var(--tinta-suave)}
 .barra-fondo{background:var(--hueso);border-radius:6px;height:10px;overflow:hidden;margin-top:4px}
@@ -242,10 +250,47 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
       <div class="titulo">
         <div><h2>Pedidos</h2>
           <p class="sub">ordenados solos: primero lo que se vence antes</p></div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn linea chico" id="btn-etapas" hidden>etapas</button>
           <button class="btn suave" id="btn-pegar-pedido">pegar de la página</button>
           <button class="btn" id="btn-nuevo-pedido">+ pedido</button>
         </div>
+      </div>
+      <!-- Filtros. Son <select> y no chips porque cada uno tiene 4-7 opciones y en un
+           teléfono cinco filas de chips se comen la pantalla. Los valores viven en
+           `filtrosPedidos`, no aquí: el repintado los vuelve a poner. -->
+      <div class="chips filtros" id="filtros-pedidos" style="margin-bottom:12px">
+        <select data-filtro="estado" aria-label="estado">
+          <option value="abiertos">abiertos</option>
+          <option value="nuevo">nuevos</option>
+          <option value="proceso">en proceso</option>
+          <option value="listo">listos</option>
+          <option value="entregado">entregados</option>
+          <option value="cancelado">cancelados</option>
+          <option value="todos">todos</option>
+        </select>
+        <select data-filtro="entrega" aria-label="entrega">
+          <option value="todos">Puebla y foráneos</option>
+          <option value="local">solo Puebla</option>
+          <option value="foraneo">solo foráneos</option>
+        </select>
+        <select data-filtro="urgencia" aria-label="urgencia">
+          <option value="todos">cualquier urgencia</option>
+          <option value="urgente">urgentes</option>
+          <option value="pronto">próximos 3 días</option>
+          <option value="tranquilo">con tiempo</option>
+        </select>
+        <select data-filtro="cuando" aria-label="cuándo se entrega">
+          <option value="todas">cualquier fecha</option>
+          <option value="semana">se entregan esta semana</option>
+          <option value="mes">se entregan este mes</option>
+          <option value="vencidos">ya vencidos</option>
+          <option value="sinfecha">sin fecha confirmada</option>
+        </select>
+        <select data-filtro="origen" aria-label="de dónde llegó"></select>
+        <select data-filtro="etapa" aria-label="etapas"></select>
+        <button class="chip" id="filtros-limpiar" hidden>quitar filtros</button>
+        <span class="nota" id="filtros-cuenta"></span>
       </div>
       <div id="avisos-pedidos"></div>
       <div id="cola-pedidos"></div>
@@ -387,7 +432,7 @@ window.addEventListener('unhandledrejection', function (e) {
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { initializeFirestore, doc, getDoc, getDocs, setDoc, collection, addDoc, onSnapshot,
-         query, orderBy, runTransaction, writeBatch, serverTimestamp, updateDoc, deleteDoc, Bytes }
+         query, orderBy, runTransaction, writeBatch, serverTimestamp, updateDoc, deleteDoc, deleteField, Bytes }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged }
   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
@@ -449,6 +494,9 @@ function dinero(c) {
 // YYYY-MM-DD leído con new Date() se interpreta como UTC y de noche en México muestra el
 // día anterior. Todo pasa por aquí.
 const fechaLocal = f => new Date(f + 'T00:00:00');
+// La fecha civil de un Date cualquiera. hoyISO() es este mismo cálculo sobre el reloj:
+// separarlos es lo que deja inyectar `hoy` en las pruebas de los filtros.
+const fechaISO = d => d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 function hoyISO() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
@@ -507,6 +555,32 @@ const anticipoSugerido = totalCent => Math.round((totalCent || 0) / 2);
 // ═══════════════════════════════════════════════════════════════
 const ESTADOS = ['nuevo','proceso','listo','entregado','cancelado'];
 const ABIERTOS = ['nuevo','proceso','listo'];
+
+// ── Etapas del proceso de cada pedido (7-sep-2026) ─────────────
+// Elita, el primer día: "poder poner fondo listo, marco listo, figuras listas… etiquetas
+// al mismo pedido para saber cómo va". Decisiones que Codex cambió en el diseño y no se
+// re-discuten:
+// - Las etapas viven EN CADA PEDIDO, no en un catálogo global: unas servilletas no llevan
+//   "marco listo", y un "3 de 5" contra un catálogo ajeno sería mentira. El catálogo es
+//   solo la plantilla que se copia al pedido al crearlo; después cada pedido es dueño de
+//   las suyas (se agregan o se quitan una por una).
+// - Cada etapa tiene un ID ESTABLE (`e_fondo`), no su nombre ni su posición: renombrarla
+//   en el catálogo no desconecta las marcas viejas, y reordenarlo tampoco. El pedido
+//   guarda también el nombre, como respaldo si la etapa desaparece del catálogo.
+// - Se guarda campo por campo (`etapas.e_x.hecha`), nunca el mapa entero: dos personas
+//   marcando etapas distintas del mismo pedido se fusionan en vez de pisarse.
+const ETAPAS_DEFAULT = [
+  {id:'e_fondo',   nombre:'fondo listo'},
+  {id:'e_figuras', nombre:'figuras listas'},
+  {id:'e_marco',   nombre:'marco listo'},
+  {id:'e_armado',  nombre:'armado'},
+  {id:'e_avisada', nombre:'clienta avisada'}
+];
+const ETAPAS_MAX = 12;   // mismo techo que las reglas (`etapas` es un mapa de hasta 12)
+
+// Filtros de la lista de pedidos. Viven fuera del DOM para sobrevivir a los repintados.
+const FILTROS_PEDIDOS_DEFAULT = {estado:'abiertos', entrega:'todos', urgencia:'todos',
+                                 cuando:'todas', origen:'todos', etapa:'todas'};
 const ROLES = {duena:'dueña', socia:'socia', apoyo:'apoyo'};
 // De dónde llegó el pedido. Marcela (junta del 2-sep-2026): "agregar un apartado que sea
 // que lo pidieron a través de la publicidad, para ver qué tal" — meten dinero en anuncios
@@ -517,7 +591,7 @@ const ORIGENES = {instagram:'Instagram', anuncio:'anuncio pagado', recomendacion
 const estado = {
   usuario: null, miembro: null,
   pedidos: [], cobros: [], materiales: [], invMovs: [], gastos: [], tareas: [], miembros: [],
-  catalogo: {piezas: [], cuentas: []},
+  catalogo: {piezas: [], cuentas: [], etapas: []},
   cargado: {}
 };
 let desuscribir = [];
@@ -599,14 +673,91 @@ function urgencia(p) {
   if (dias !== null && dias <= 3) return {rango:4, dias, texto:'quedan ' + dias + ' días hábiles', clase:'p-ambar'};
   return {rango:5, dias, texto:'quedan ' + dias + ' días hábiles', clase:'p-verde'};
 }
-function pedidosOrdenados() {
+function pedidosOrdenados(todos = false) {
   return estado.pedidos
-    .filter(p => ABIERTOS.includes(p.estado))
+    .filter(p => todos || ABIERTOS.includes(p.estado))
     .map(p => ({p, u: urgencia(p)}))
     .sort((a,b) => a.u.rango - b.u.rango
       || ((a.u.dias ?? 9999) - (b.u.dias ?? 9999))
       || String(a.p.folio).localeCompare(String(b.p.folio)));
 }
+
+// ── Etapas: derivadas del pedido, saneadas ─────────────────────
+// El catálogo (config/etapas) es la plantilla. Mientras no se sepa si existe, o si no
+// existe, vale el default. `estado.catalogo` puede faltar en las pruebas.
+function catalogoEtapas() {
+  const l = estado.catalogo && estado.catalogo.etapas;
+  return Array.isArray(l) && l.length ? l : ETAPAS_DEFAULT;
+}
+// Lo que se copia a un pedido nuevo: todas las del catálogo, sin hacer.
+function plantillaEtapas() {
+  const o = {};
+  catalogoEtapas().forEach(e => { o[e.id] = {nombre: e.nombre, hecha: false}; });
+  return o;
+}
+// Las etapas de UN pedido, validadas una por una (las reglas no saben mirar dentro del
+// mapa): id y nombre como texto, `hecha` solo cuenta si es exactamente true. Se ordenan
+// como el catálogo, y las que ya no están en él van al final por nombre — siguen
+// contando: el catálogo de hoy no reescribe lo que ese pedido ya tenía.
+const ETAPA_ID_OK = /^e_[A-Za-z0-9]{1,30}$/;
+function etapasDe(p) {
+  const m = p && p.etapas && typeof p.etapas === 'object' && !Array.isArray(p.etapas) ? p.etapas : {};
+  const orden = new Map(catalogoEtapas().map((e, i) => [e.id, i]));
+  return Object.entries(m)
+    // El id se valida con la MISMA forma con la que se escribe: un `e_mala.ruta` escrito
+    // por SDK se leería bien pero al marcarlo `etapas.e_mala.ruta.hecha` tocaría otra cosa
+    // (el punto separa rutas en Firestore). Y el nombre se recorta al leer, no solo al
+    // escribir: las reglas no pueden mirar dentro del mapa, así que un nombre de varios KB
+    // metido por consola rompería la pantalla de las tres.
+    .filter(([id, v]) => ETAPA_ID_OK.test(id) && v && typeof v === 'object'
+                         && typeof v.nombre === 'string' && v.nombre.trim())
+    .map(([id, v]) => ({id, nombre: v.nombre.trim().slice(0, 60), hecha: v.hecha === true}))
+    .sort((a, b) => (orden.has(a.id) ? orden.get(a.id) : 999) - (orden.has(b.id) ? orden.get(b.id) : 999)
+                    || a.nombre.localeCompare(b.nombre))
+    .slice(0, ETAPAS_MAX);
+}
+// "3 de 5" SOLO contra las etapas que ese pedido tiene. Sin etapas no hay fracción.
+function progresoEtapas(p) {
+  const e = etapasDe(p);
+  const hechas = e.filter(x => x.hecha).length;
+  return {total: e.length, hechas, siguiente: e.find(x => !x.hecha) || null,
+          completo: e.length > 0 && hechas === e.length};
+}
+
+// ── Filtros de la lista de pedidos ─────────────────────────────
+// Beto: "poder filtrar por varios: de dónde son, cuándo se entrega, en qué urgencia, si
+// son de Puebla o de otro estado". Puro filtro sobre la cola ya ordenada; recibe `hoy`
+// para poder probarse.
+function filtrarPedidos(items, f, hoy = new Date()) {
+  const s = semanaActual(hoy), m = rangoPeriodo('mes', 0, hoy);
+  return items.filter(({p, u}) => {
+    if (f.estado === 'abiertos' ? !ABIERTOS.includes(p.estado)
+                                : (f.estado !== 'todos' && p.estado !== f.estado)) return false;
+    if (f.entrega !== 'todos' && (p.entrega === 'foraneo' ? 'foraneo' : 'local') !== f.entrega) return false;
+    // urgencia(): 0 sin fecha · 1 vencido · 2 lista sin enviar · 3 hoy/mañana · 4 ≤3 días · 5 el resto
+    if (f.urgencia === 'urgente' && u.rango > 3) return false;
+    if (f.urgencia === 'pronto' && u.rango !== 4) return false;
+    if (f.urgencia === 'tranquilo' && u.rango !== 5) return false;
+    if (f.cuando === 'semana' && !enSemana(p.fechaComprometida, s)) return false;
+    if (f.cuando === 'mes' && !enSemana(p.fechaComprometida, m)) return false;
+    // Vencido = la fecha que se le prometió a la clienta ya pasó. NO se usa `u.dias`, que
+    // sale de fechaOperativa() y a un foráneo le resta los días de paquetería: por ahí un
+    // pedido que se entrega en tres días salía "vencido" solo porque ya debió salir del
+    // taller. Eso es urgencia, y para eso está el otro filtro.
+    if (f.cuando === 'vencidos'
+        && !(esFechaValida(p.fechaComprometida) && fechaLocal(p.fechaComprometida) < fechaLocal(fechaISO(hoy)))) return false;
+    if (f.cuando === 'sinfecha' && esFechaValida(p.fechaComprometida)) return false;
+    if (f.origen !== 'todos' && (ORIGENES[p.origen] ? p.origen : 'otro') !== f.origen) return false;
+    if (f.etapa === 'incompletos') { const pr = progresoEtapas(p); if (!(pr.total > 0 && !pr.completo)) return false; }
+    if (f.etapa === 'completos' && !progresoEtapas(p).completo) return false;
+    if (typeof f.etapa === 'string' && f.etapa.startsWith('falta:')) {
+      const e = etapasDe(p).find(x => x.id === f.etapa.slice(6));
+      if (!e || e.hecha) return false;
+    }
+    return true;
+  });
+}
+const hayFiltrosActivos = f => Object.keys(FILTROS_PEDIDOS_DEFAULT).some(k => f[k] !== FILTROS_PEDIDOS_DEFAULT[k]);
 
 // ── Inventario: la existencia SALE de los movimientos ──────────
 // Un campo "existencia" guardado y unos movimientos aparte son dos verdades que tarde o
@@ -982,7 +1133,12 @@ function irA(id) {
 
 // ── Pedidos ────────────────────────────────────────────────────
 function pintarPedidos() {
-  const cola = pedidosOrdenados();
+  $('btn-etapas').hidden = !esDuena();
+  pintarFiltros();
+  const todo = pedidosOrdenados(filtrosPedidos.estado !== 'abiertos');
+  const cola = filtrarPedidos(todo, filtrosPedidos);
+  $('filtros-cuenta').textContent = hayFiltrosActivos(filtrosPedidos)
+    ? `${cola.length} de ${todo.length}` : '';
   const cont = $('cola-pedidos');
   // "Cargando" y "vacío" son cosas distintas: antes, mientras llegaba el primer snapshot,
   // la pantalla decía "no hay pedidos" y eso es mentira durante unos segundos. También
@@ -993,7 +1149,9 @@ function pintarPedidos() {
     return;
   }
   if (!cola.length) {
-    cont.innerHTML = `<div class="tarjeta"><p class="vacio">Todavía no hay pedidos abiertos.<br>
+    cont.innerHTML = hayFiltrosActivos(filtrosPedidos)
+      ? `<div class="tarjeta"><p class="vacio">Ningún pedido cumple con esos filtros.</p></div>`
+      : `<div class="tarjeta"><p class="vacio">Todavía no hay pedidos abiertos.<br>
       Toca <b>+ pedido</b> para capturar el primero.</p></div>`;
     return;
   }
@@ -1014,8 +1172,10 @@ function pintarPedidos() {
           <div class="reng-meta">${esc(cuando)}${p.entrega === 'foraneo'
             ? ' · ' + esc(p.ciudad || 'foráneo') : ' · Puebla'}</div>
           <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
-            <span class="pastilla ${u.clase}">${esc(u.texto)}</span>
+            ${ABIERTOS.includes(p.estado)
+              ? `<span class="pastilla ${u.clase}">${esc(u.texto)}</span>` : ''}
             <span class="pastilla p-gris">${esc(p.estado)}</span>
+            ${pastillaEtapas(p)}
             ${saldo > 0 ? `<span class="pastilla p-rojo">debe ${dinero(saldo)}</span>`
               : `<span class="pastilla p-verde">pagado</span>`}
           </div>
@@ -1254,7 +1414,8 @@ function pintarInicio() {
     : `<ul class="lista">` + urgentes.map(({p,u}) => `<li class="reng">
         <div class="reng-cuerpo"><div class="reng-tit">${esc(p.cliente?.nombre || 'sin nombre')}</div>
           <div class="reng-meta">${esc((p.renglones||[]).map(r => r.cantidad + '× ' + (r.nombre||'')).join(' · '))}</div>
-          <span class="pastilla ${u.clase}" style="margin-top:6px;display:inline-block">${esc(u.texto)}</span></div>
+          <span class="pastilla ${u.clase}" style="margin-top:6px;display:inline-block">${esc(u.texto)}</span>
+          ${pastillaEtapas(p, 'margin-top:6px;display:inline-block')}</div>
         <div class="reng-lado"><button class="btn suave chico" data-verped="${esc(p.id)}">ver</button></div>
       </li>`).join('') + `</ul>`;
   $('inicio-urgentes').querySelectorAll('[data-verped]').forEach(b =>
@@ -2430,7 +2591,10 @@ $('btn-salir').addEventListener('click', async () => {
   estado.cargado = {};
   estado.pedidos = []; estado.cobros = []; estado.materiales = []; estado.invMovs = [];
   estado.gastos = []; estado.tareas = []; estado.miembros = [];
-  estado.catalogo.cuentas = [];
+  estado.catalogo.cuentas = []; estado.catalogo.etapas = [];
+  // Si no, la siguiente persona entra con los filtros de la anterior y ve una lista casi
+  // vacía sin entender por qué.
+  filtrosPedidos = {...FILTROS_PEDIDOS_DEFAULT};
   reiniciarSitio();
   // Sin esto, la sesión siguiente heredaba la pestaña de la anterior: si Gaby salió en
   // "mi página" y luego entra Elita (rol 'apoyo'), el menú esconde la pestaña pero el
@@ -2778,6 +2942,9 @@ function abrirNuevoPedido(prefill = {}) {
       fechaSolicitada: $('f-solicitada').value || hoyISO(),
       fechaComprometida: comprometida || null,
       notas: $('f-notas').value.trim(),
+      // Las etapas de siempre, copiadas al pedido: desde aquí son suyas. Si el catálogo
+      // aún no llegó se queda sin etapas antes que adivinar; en el detalle se ponen.
+      etapas: estado.cargado.etapas ? plantillaEtapas() : {},
       creadoPor: estado.usuario.uid,
       creadoEn: serverTimestamp()
     };
@@ -2909,6 +3076,10 @@ $('btn-pegar-pedido').addEventListener('click', () => {
 // ── Controles del resumen ──────────────────────────────────────
 $('btn-publicar').addEventListener('click', publicar);
 $('btn-cuentas').addEventListener('click', dialogoCuentas);
+$('btn-etapas').addEventListener('click', dialogoEtapas);
+$('filtros-pedidos').querySelectorAll('[data-filtro]').forEach(sel =>
+  sel.addEventListener('change', () => { filtrosPedidos[sel.dataset.filtro] = sel.value; pintarPedidos(); }));
+$('filtros-limpiar').addEventListener('click', () => { filtrosPedidos = {...FILTROS_PEDIDOS_DEFAULT}; pintarPedidos(); });
 
 $('res-semana').addEventListener('click', () => { resTipo = 'semana'; resOffset = 0; pintarResumen(); });
 $('res-mes').addEventListener('click', () => { resTipo = 'mes'; resOffset = 0; pintarResumen(); });
@@ -2969,6 +3140,8 @@ function abrirPedido(id) {
     ${operaDinero() && p.estado !== 'cancelado'
       ? `<button type="button" class="btn linea chico" data-corregir-pedido
            style="margin-bottom:12px">corregir el pedido</button>` : ''}
+    <p class="sub" style="margin-bottom:4px">cómo va</p>
+    <div id="etapas-pedido" style="margin-bottom:12px">${htmlEtapas(p)}</div>
     <div class="campo"><label for="f-estado">estado</label>
       <select id="f-estado">${ESTADOS.map(e =>
         `<option value="${e}"${e === p.estado ? ' selected' : ''}>${e}</option>`).join('')}</select></div>
@@ -2977,18 +3150,22 @@ function abrirPedido(id) {
     <button class="btn" data-guardar style="width:100%">guardar cambios</button>
   `, async () => {
     const nuevoEstado = $('f-estado').value;
-    const nuevaFecha = $('f-comp2').value;
+    const nuevaFecha = $('f-comp2').value || null;
     if (!ESTADOS.includes(nuevoEstado)) { avisar('Estado no válido'); return false; }
     if (nuevaFecha && !esFechaValida(nuevaFecha)) { avisar('Fecha no válida'); return false; }
+    // Solo viaja lo que de verdad cambió respecto a lo que se abrió (hallazgo de Codex):
+    // si Elita abre el pedido en "nuevo", Gaby lo pasa a "proceso", y Elita solo mueve
+    // la fecha, reenviar el estado lo regresaría a "nuevo" sin que nadie lo pidiera.
+    const cambios = {};
+    if (nuevoEstado !== p.estado) cambios.estado = nuevoEstado;
+    if (nuevaFecha !== (p.fechaComprometida || null)) cambios.fechaComprometida = nuevaFecha;
+    if (!Object.keys(cambios).length) { avisar('No había nada que guardar'); return; }
     try {
-      // update parcial: nunca se reescribe el documento entero, porque otra persona pudo
-      // haber tocado otro campo mientras este diálogo estaba abierto.
-      await updateDoc(doc(db, RAIZ + '/pedidos', p.id), {
-        estado: nuevoEstado, fechaComprometida: nuevaFecha || null
-      });
+      await updateDoc(doc(db, RAIZ + '/pedidos', p.id), cambios);
       avisar('Pedido actualizado');
     } catch (e) { console.error('editar pedido', e); avisar(mensajeError(e)); return false; }
   });
+  engancharEtapas(p.id);
   // Los botones de dinero dentro del detalle abren su propio diálogo (cierran este).
   $('dlg-cuerpo').querySelectorAll('[data-corregir]').forEach(b => b.addEventListener('click', () => {
     $('dlg').close(); setTimeout(() => dialogoCorregirPago(b.dataset.corregir), 60);
@@ -2997,6 +3174,177 @@ function abrirPedido(id) {
   if (pagar) pagar.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCobro(p.id), 60); });
   const corr = $('dlg-cuerpo').querySelector('[data-corregir-pedido]');
   if (corr) corr.addEventListener('click', () => { $('dlg').close(); setTimeout(() => dialogoCorregirPedido(p.id), 60); });
+}
+
+// ── Etapas en el detalle ───────────────────────────────────────
+// La pastilla de la lista: "3 de 5 · falta marco listo". Sin etapas, nada.
+function pastillaEtapas(p, estilo = '') {
+  const pr = progresoEtapas(p);
+  if (!pr.total) return '';
+  const clase = pr.completo ? 'p-verde' : pr.hechas ? 'p-ambar' : 'p-gris';
+  const texto = pr.completo ? `${pr.total} de ${pr.total} etapas`
+    : `${pr.hechas} de ${pr.total} · falta ${pr.siguiente.nombre}`;
+  return `<span class="pastilla ${clase}"${estilo ? ` style="${estilo}"` : ''}>${esc(texto)}</span>`;
+}
+function htmlEtapas(p) {
+  const lista = etapasDe(p);
+  const tiene = new Set(lista.map(e => e.id));
+  const faltanDelCatalogo = catalogoEtapas().filter(e => !tiene.has(e.id));
+  const pr = progresoEtapas(p);
+  // Mientras no se sepa si hay catálogo propio, no se ofrece agregar: podría ofrecer una
+  // etapa del default que la dueña ya había quitado. Lo que el pedido YA tiene sí se pinta.
+  const puedeAgregar = estado.cargado.etapas && lista.length < ETAPAS_MAX && faltanDelCatalogo.length;
+  return `
+    ${lista.map(e => `<div class="etapa${e.hecha ? ' hecha' : ''}">
+      <input type="checkbox" id="et-${esc(e.id)}" data-etapa="${esc(e.id)}"${e.hecha ? ' checked' : ''}>
+      <label for="et-${esc(e.id)}">${esc(e.nombre)}</label>
+      <button type="button" class="quitar" data-quitar-etapa="${esc(e.id)}" aria-label="quitar ${esc(e.nombre)}" title="esta etapa no aplica a este pedido">×</button>
+    </div>`).join('')}
+    ${!lista.length ? `<p class="nota" style="margin:4px 0 8px">Este pedido no tiene etapas.</p>
+      ${estado.cargado.etapas
+        ? `<button type="button" class="btn suave chico" data-etapas-plantilla style="margin-bottom:8px">poner las etapas de siempre</button>`
+        : `<p class="nota">Cargando las etapas…</p>`}` : ''}
+    ${puedeAgregar ? `<div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+      <select id="et-agregar" style="flex:1;font-size:14px;padding:6px 10px">
+        <option value="">+ agregar etapa…</option>
+        ${faltanDelCatalogo.map(e => `<option value="${esc(e.id)}">${esc(e.nombre)}</option>`).join('')}
+      </select></div>` : ''}
+    ${pr.completo && ['nuevo','proceso'].includes(p.estado)
+      ? `<div class="aviso bien" style="margin-top:10px">Todas las etapas están hechas.
+          <button type="button" class="btn linea chico" data-poner-listo style="margin-left:6px;padding:3px 10px;font-size:12px">poner estado en listo</button></div>` : ''}
+    ${!pr.completo && pr.total && p.estado === 'listo'
+      ? `<p class="nota" style="margin-top:8px">Está en "listo" pero le faltan etapas. Revisa cuál es la verdad.</p>` : ''}
+    <p class="nota" style="margin-top:8px">Cada marca se guarda al instante, sin "guardar cambios".</p>`;
+}
+// Cada marca es UNA escritura a `etapas.<id>.hecha`. Nunca se manda el mapa completo:
+// dos personas marcando etapas distintas del mismo pedido se fusionan en vez de pisarse.
+function engancharEtapas(pedidoId) {
+  const cont = $('etapas-pedido');
+  if (!cont) return;
+  cont.dataset.pedidoId = pedidoId;
+  // El <dialog> es único y su cuerpo se reusa: `#etapas-pedido` existe en CUALQUIER pedido
+  // abierto. Sin esto, marcar una etapa en A, cerrar y abrir B antes de que respondiera el
+  // servidor repintaba el cuerpo de B con las etapas de A y reenganchaba las casillas
+  // contra A: la siguiente palomita que alguien veía en B escribía en A, sin ningún error.
+  // Lo cazaron Codex y code-reviewer por separado. `generacionDialogo` ya existía para
+  // exactamente esto (lo usa el botón de guardar); aquí faltaba.
+  const miGeneracion = generacionDialogo;
+  const ref = doc(db, RAIZ + '/pedidos', pedidoId);
+  const repintar = () => {
+    const actual = $('etapas-pedido');
+    if (miGeneracion !== generacionDialogo || actual !== cont
+        || cont.dataset.pedidoId !== pedidoId) return;
+    const p = estado.pedidos.find(x => x.id === pedidoId);
+    if (!p) return;
+    cont.innerHTML = htmlEtapas(p);
+    engancharEtapas(pedidoId);
+  };
+  // Se repinta con lo que el servidor confirmó, no con lo que se cree que pasó: por eso
+  // se espera al snapshot en vez de mutar `p` en memoria (`pintarTodo` no toca el diálogo).
+  const guardar = async (cambios, msg) => {
+    try { await updateDoc(ref, cambios); if (msg) avisar(msg); setTimeout(repintar, 350); }
+    catch (e) { console.error('etapas', e); avisar(mensajeError(e)); repintar(); }
+  };
+  cont.querySelectorAll('[data-etapa]').forEach(cb => cb.addEventListener('change', () => {
+    cb.disabled = true;
+    guardar({['etapas.' + cb.dataset.etapa + '.hecha']: cb.checked});
+  }));
+  cont.querySelectorAll('[data-quitar-etapa]').forEach(b => b.addEventListener('click', () => {
+    guardar({['etapas.' + b.dataset.quitarEtapa]: deleteField()}, 'Etapa quitada de este pedido');
+  }));
+  const sel = cont.querySelector('#et-agregar');
+  if (sel) sel.addEventListener('change', () => {
+    const e = catalogoEtapas().find(x => x.id === sel.value);
+    if (!e) return;
+    guardar({['etapas.' + e.id]: {nombre: e.nombre, hecha: false}});
+  });
+  const plantilla = cont.querySelector('[data-etapas-plantilla]');
+  if (plantilla) plantilla.addEventListener('click', () => {
+    if (!estado.cargado.etapas) { avisar('Se están cargando las etapas, intenta en un momento'); return; }
+    // Una ruta por etapa, no `{etapas: {...}}` de golpe: si otra persona agregó o marcó una
+    // mientras este diálogo estaba abierto, reemplazar el mapa entero se la borraba. Y solo
+    // se escriben las que el pedido no tiene, para no desmarcar lo que alguien ya palomeó.
+    const p = estado.pedidos.find(x => x.id === pedidoId);
+    const tiene = new Set(etapasDe(p).map(e => e.id));
+    const nuevas = catalogoEtapas().filter(e => !tiene.has(e.id));
+    if (!nuevas.length) { avisar('Este pedido ya tiene sus etapas'); return; }
+    const cambios = {};
+    nuevas.forEach(e => { cambios['etapas.' + e.id] = {nombre: e.nombre, hecha: false}; });
+    guardar(cambios, 'Etapas agregadas');
+  });
+  // Solo mueve el <select>: quien guarda sigue siendo la persona, con "guardar cambios".
+  const listo = cont.querySelector('[data-poner-listo]');
+  if (listo) listo.addEventListener('click', () => { $('f-estado').value = 'listo'; avisar('Ahora dale a guardar cambios'); });
+}
+
+// ── El catálogo de etapas (la plantilla), solo dueña ───────────
+// No es un textarea como el de cuentas: aquí cada renglón tiene un id que NO cambia al
+// renombrar, y un textarea no distingue "renombré" de "borré una y agregué otra".
+function dialogoEtapas() {
+  if (!esDuena()) { avisar('Solo la dueña cambia las etapas'); return; }
+  if (!estado.cargado.etapas) { avisar('Se están cargando las etapas, intenta en un momento'); return; }
+  const lista = catalogoEtapas().map(e => ({...e}));
+  const pintar = () => {
+    $('et-lista').innerHTML = lista.map((e, i) => `<div class="etapa">
+      <input type="text" data-i="${i}" value="${esc(e.nombre)}" maxlength="40" style="flex:1;font-size:15px;padding:6px 10px">
+      <button type="button" class="quitar" data-q="${i}" aria-label="quitar">×</button></div>`).join('')
+      + (lista.length < ETAPAS_MAX ? `<button type="button" class="btn linea chico" id="et-nueva" style="margin-top:8px">+ otra etapa</button>` : '');
+    $('et-lista').querySelectorAll('[data-i]').forEach(inp => inp.addEventListener('input', () => { lista[+inp.dataset.i].nombre = inp.value; }));
+    $('et-lista').querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => { lista.splice(+b.dataset.q, 1); pintar(); }));
+    const nueva = $('et-nueva');
+    if (nueva) nueva.addEventListener('click', () => { lista.push({id: 'e_' + nuevaOp(), nombre: ''}); pintar();
+      const inputs = $('et-lista').querySelectorAll('[data-i]'); inputs[inputs.length - 1]?.focus(); });
+  };
+  abrirDialogo('Etapas de siempre', `
+    <p class="nota" style="margin-bottom:10px">Son las etapas que se le ponen a cada pedido nuevo.
+      Cambiarlas aquí no toca los pedidos que ya existen: en cada uno se agregan o se quitan
+      por separado.</p>
+    <div id="et-lista"></div>
+    <button class="btn" data-guardar style="width:100%;margin-top:12px">guardar etapas</button>
+  `, async () => {
+    const limpia = lista.map(e => ({id: e.id, nombre: cortarBytes(String(e.nombre || '').trim(), 60)}))
+      .filter(e => e.nombre && /^e_[A-Za-z0-9]{1,30}$/.test(e.id));
+    if (!limpia.length) { avisar('Deja al menos una etapa'); return false; }
+    if (limpia.length > ETAPAS_MAX) { avisar('Máximo ' + ETAPAS_MAX + ' etapas'); return false; }
+    if (new Set(limpia.map(e => e.id)).size !== limpia.length) { avisar('Hay una etapa repetida'); return false; }
+    // Dos "marco listo" con ids distintos no rompen nada, pero en el pedido salen dos
+    // casillas idénticas y nadie sabe cuál es cuál.
+    if (new Set(limpia.map(e => e.nombre.toLowerCase())).size !== limpia.length) {
+      avisar('Hay dos etapas con el mismo nombre'); return false; }
+    try {
+      await setDoc(doc(db, RAIZ + '/config', 'etapas'), {
+        lista: limpia, actualizadoPor: estado.usuario.uid, actualizadoEn: serverTimestamp()
+      });
+      avisar('Etapas guardadas');
+    } catch (e) { console.error('etapas catálogo', e); avisar(mensajeError(e)); return false; }
+  });
+  pintar();
+}
+
+// ── Filtros: estado en memoria, selects que lo reflejan ────────
+let filtrosPedidos = {...FILTROS_PEDIDOS_DEFAULT};
+function pintarFiltros() {
+  const barra = $('filtros-pedidos');
+  // origen y etapa se llenan aquí porque dependen de datos; los demás son fijos en el HTML
+  const selOrigen = barra.querySelector('[data-filtro="origen"]');
+  if (!selOrigen.options.length) {
+    selOrigen.innerHTML = `<option value="todos">de cualquier lado</option>` +
+      Object.entries(ORIGENES).map(([k, v]) => `<option value="${k}">de ${esc(v)}</option>`).join('');
+  }
+  const selEtapa = barra.querySelector('[data-filtro="etapa"]');
+  const opcionesEtapa = `<option value="todas">cualquier etapa</option>
+    <option value="incompletos">con etapas pendientes</option>
+    <option value="completos">con todas las etapas</option>` +
+    catalogoEtapas().map(e => `<option value="falta:${esc(e.id)}">falta ${esc(e.nombre)}</option>`).join('');
+  if (selEtapa.innerHTML !== opcionesEtapa) selEtapa.innerHTML = opcionesEtapa;
+  barra.querySelectorAll('[data-filtro]').forEach(sel => {
+    const k = sel.dataset.filtro;
+    // si el valor guardado ya no existe (una etapa borrada del catálogo), se vuelve al default
+    if (![...sel.options].some(o => o.value === filtrosPedidos[k])) filtrosPedidos[k] = FILTROS_PEDIDOS_DEFAULT[k];
+    sel.value = filtrosPedidos[k];
+    sel.classList.toggle('activo', filtrosPedidos[k] !== FILTROS_PEDIDOS_DEFAULT[k]);
+  });
+  $('filtros-limpiar').hidden = !hayFiltrosActivos(filtrosPedidos);
 }
 
 // ── Escrituras de dinero: idempotentes ─────────────────────────
@@ -3128,8 +3476,19 @@ function dialogoCorregirPedido(pedidoId) {
     <div class="campo"><label for="c-envio">envío que le cobras</label>
       <input type="number" id="c-envio" step="0.01" min="0" inputmode="decimal"
         value="${(envioDe(p) / 100).toFixed(2)}"></div>
-    <p class="nota" style="margin:-8px 0 12px">Déjalo en cero si este pedido no lleva envío.
-      El tipo de entrega (recoge en Puebla o foráneo) no se cambia aquí.</p>
+    <p class="nota" style="margin:-8px 0 12px">Déjalo en cero si este pedido no lleva envío.</p>
+    <div class="campo"><label for="c-entrega">¿cómo la recibe?</label>
+      <select id="c-entrega">
+        <option value="local"${p.entrega === 'foraneo' ? '' : ' selected'}>recoge en Puebla</option>
+        <option value="foraneo"${p.entrega === 'foraneo' ? ' selected' : ''}>envío foráneo</option>
+      </select></div>
+    <div class="campo" id="c-caja-ciudad"${p.entrega === 'foraneo' ? '' : ' hidden'}>
+      <label for="c-ciudad">¿a qué ciudad?</label>
+      <input type="text" id="c-ciudad" maxlength="60" value="${esc(p.ciudad || '')}"></div>
+    <p class="aviso falta" id="c-envio-aviso" hidden style="margin:-4px 0 12px">Lo pasaste a
+      foráneo y el envío está en cero: si le vas a cobrar el envío, escríbelo arriba.</p>
+    <p class="nota" style="margin:-8px 0 12px">Cambiar esto mueve la urgencia: un foráneo
+      tiene que estar listo 3 días hábiles antes para que le dé tiempo a la paquetería.</p>
     <p class="nota" id="c-total" style="margin-bottom:12px"></p>
     <p class="aviso falta" id="c-aviso" hidden style="margin-bottom:12px"></p>
     <div class="campo"><label for="c-motivo">¿por qué lo corriges?</label>
@@ -3149,6 +3508,12 @@ function dialogoCorregirPedido(pedidoId) {
     const nEnv = parseFloat($('c-envio').value);
     if (!Number.isFinite(nEnv) || nEnv < 0) { avisar('El envío no es un número válido'); return false; }
     const envioCent = aCent(nEnv);
+    // Elita capturó un pedido de la Ciudad de México como si fuera de Puebla y no había
+    // forma de arreglarlo. No es dinero, pero cambia la urgencia (los días de paquetería),
+    // así que va por el mismo camino auditado: queda quién lo cambió y qué decía antes.
+    const entrega = $('c-entrega').value === 'foraneo' ? 'foraneo' : 'local';
+    const ciudad = entrega === 'foraneo' ? $('c-ciudad').value.trim().slice(0, 60) : '';
+    if (entrega === 'foraneo' && !ciudad) { avisar('Escribe a qué ciudad va'); return false; }
     const totalCent = aCent(precio) * cant + envioCent;
     if (totalCent >= MONTO_MAX_CENT) { avisar('El total pasa de un millón; revisa precio y cantidad'); return false; }
     // El renglón conserva su id: es el mismo renglón corregido, no uno nuevo, y así la
@@ -3162,7 +3527,7 @@ function dialogoCorregirPedido(pedidoId) {
       b.update(doc(db, RAIZ + '/pedidos', p.id), {
         cliente: {nombre, tel: p.cliente?.tel || ''},
         renglones, totalCent, subtotalPiezasCent: aCent(precio) * cant,
-        envioCobradoCent: envioCent,
+        envioCobradoCent: envioCent, entrega, ciudad,
         // El pedido apunta a su corrección: es como las reglas encuentran el rastro y
         // comprueban que dice los mismos números que el pedido.
         correccionOpId: opId
@@ -3173,8 +3538,9 @@ function dialogoCorregirPedido(pedidoId) {
         pedidoId: p.id, opId, motivo,
         antes: {totalCent: p.totalCent || 0, envioCobradoCent: envioDe(p),
                 renglones: Array.isArray(p.renglones) ? p.renglones : [],
-                cliente: p.cliente?.nombre || ''},
-        despues: {totalCent, envioCobradoCent: envioCent, renglones, cliente: nombre},
+                cliente: p.cliente?.nombre || '',
+                entrega: p.entrega === 'foraneo' ? 'foraneo' : 'local', ciudad: p.ciudad || ''},
+        despues: {totalCent, envioCobradoCent: envioCent, renglones, cliente: nombre, entrega, ciudad},
         pagadoAlCorregir: pagado,
         corregidoPor: estado.usuario.uid, fecha: hoyISO(), creadoEn: serverTimestamp()
       });
@@ -3194,7 +3560,15 @@ function dialogoCorregirPedido(pedidoId) {
       // corrección porque el "antes" que se capturó ya no es el del servidor. Eso está
       // bien —no se pisa el cambio de nadie— pero el mensaje genérico habla de permisos y
       // hace pensar en un problema de cuenta.
-      if (ya?.exists() && ya.data().totalCent !== p.totalCent) {
+      // Comparar solo el total dejaba fuera el choque en el que lo único que cambió fue la
+      // clienta, la entrega o la ciudad: la regla lo rechaza igual (el "antes" ya no cuadra)
+      // pero el mensaje hablaba de permisos y hacía pensar en un problema de cuenta.
+      const d = ya?.exists() ? ya.data() : null;
+      if (d && (d.totalCent !== p.totalCent
+                || (d.entrega || 'local') !== (p.entrega || 'local')
+                || (d.ciudad || '') !== (p.ciudad || '')
+                || (d.cliente?.nombre || '') !== (p.cliente?.nombre || '')
+                || (d.correccionOpId || '') !== (p.correccionOpId || ''))) {
         avisar('Alguien más corrigió este pedido hace un momento. Ciérralo, ábrelo otra vez y revisa antes de corregir');
         return false;
       }
@@ -3202,12 +3576,22 @@ function dialogoCorregirPedido(pedidoId) {
       return false;
     }
   });
+  $('c-entrega').addEventListener('change', () => {
+    const foraneo = $('c-entrega').value === 'foraneo';
+    $('c-caja-ciudad').hidden = !foraneo;
+    // Cambiar la entrega no toca el envío, y un pedido que pasa a foráneo con envío en
+    // cero es casi siempre un olvido: se dice, no se corrige solo (un aviso nunca actúa).
+    const env = parseFloat($('c-envio').value);
+    $('c-envio-aviso').hidden = !(foraneo && (!Number.isFinite(env) || env === 0));
+  });
   // El total y el aviso de "queda por debajo de lo pagado" se recalculan mientras escribe:
   // el momento de enterarse es antes de guardar, no después.
   const repasar = () => {
     const cant = Number($('c-cant').value);
     const precio = parseFloat($('c-precio').value);
     const env = parseFloat($('c-envio').value);
+    const avEnv = $('c-envio-aviso');
+    if (avEnv) avEnv.hidden = !($('c-entrega').value === 'foraneo' && (!Number.isFinite(env) || env === 0));
     const envCent = Number.isFinite(env) && env >= 0 ? aCent(env) : 0;
     const ok = Number.isInteger(cant) && cant >= 1 && Number.isFinite(precio) && precio >= 0;
     const total = ok ? aCent(precio) * cant + envCent : null;
@@ -3487,6 +3871,20 @@ function escuchar() {
     // así hasta el siguiente repintado por otro motivo: nada más avisaba de que YA llegó.
     pintarTodo();
   }, e => { console.error('escuchar config/cuentas', e); punto('mal'); }));
+  // La plantilla de etapas. Se sanea igual que el pedido: id con forma, nombre con texto.
+  desuscribir.push(onSnapshot(doc(db, RAIZ + '/config', 'etapas'), snap => {
+    const lista = snap.exists() ? snap.data().lista : null;
+    const vistos = new Set();
+    estado.catalogo.etapas = Array.isArray(lista)
+      ? lista.filter(e => e && typeof e === 'object' && typeof e.id === 'string'
+                          && ETAPA_ID_OK.test(e.id) && typeof e.nombre === 'string' && e.nombre.trim()
+                          // un id repetido (escrito por SDK) daría dos opciones iguales en
+                          // el selector y la plantilla se quedaría con la última en silencio
+                          && !vistos.has(e.id) && vistos.add(e.id))
+             .map(e => ({id: e.id, nombre: e.nombre.trim().slice(0, 60)})).slice(0, ETAPAS_MAX) : [];
+    estado.cargado.etapas = true;
+    pintarTodo();
+  }, e => { console.error('escuchar config/etapas', e); punto('mal'); }));
 }
 // Cuando el teléfono recupera señal, se vuelve a enganchar en vez de esperar a que el
 // SDK reintente cuando le parezca. Patrón de mi-cartera.

@@ -110,10 +110,14 @@ service cloud.firestore {
           && a.despues.envioCobradoCent == request.resource.data.get('envioCobradoCent', 0)
           && a.despues.renglones == request.resource.data.renglones
           && a.despues.cliente == request.resource.data.cliente.nombre
+          && a.despues.entrega == request.resource.data.get('entrega', 'local')
+          && a.despues.ciudad == request.resource.data.get('ciudad', '')
           && a.antes.totalCent == resource.data.totalCent
           && a.antes.envioCobradoCent == resource.data.get('envioCobradoCent', 0)
           && a.antes.renglones == resource.data.renglones
-          && a.antes.cliente == resource.data.get('cliente', {}).get('nombre', '');
+          && a.antes.cliente == resource.data.get('cliente', {}).get('nombre', '')
+          && a.antes.entrega == resource.data.get('entrega', 'local')
+          && a.antes.ciudad == resource.data.get('ciudad', '');
       }
       // RIESGO ACEPTADO: no se exige `creadoEn == request.time` en la auditoría. Amarrarlo
       // evitaría que alguien fechara el rastro en otro día, pero si serverTimestamp() no
@@ -142,6 +146,13 @@ service cloud.firestore {
       // las dos cosas y el mismo 7-sep se vio que está mal: un pedido de Puebla también
       // se manda y también se cobra el envío. "Foráneo" solo dice que hay que restar los
       // días de paquetería a la fecha de entrega; si lleva envío es otra cosa.
+      // Las etapas del proceso ("fondo listo", "marco listo"…) son un mapa id → {nombre,
+      // hecha} de hasta 12. Cualquier miembro las marca: es trabajo de taller, no dinero.
+      // Lo de adentro de cada entrada no se puede revisar aquí (las reglas no recorren
+      // mapas); el cliente lo sanea al leer (etapasDe()) y una entrada rara solo se ignora.
+      function etapasValidas(d) {
+        return d.get('etapas', {}) is map && d.get('etapas', {}).size() <= 12;
+      }
       function envioValido(d) {
         return d.get('envioCobradoCent', 0) is int
           && d.get('envioCobradoCent', 0) >= 0
@@ -177,7 +188,8 @@ service cloud.firestore {
                       && request.resource.data.get('origen', '') is string
                       && request.resource.data.get('origen', '').size() <= 20
                       && envioValido(request.resource.data)
-                      && cuadraTotal(request.resource.data);
+                      && cuadraTotal(request.resource.data)
+                      && etapasValidas(request.resource.data);
         // Dos updates distintos, y la diferencia es si el dinero cambia.
         //
         // (a) El de todos los días —estado, fecha confirmada, notas— no toca el precio:
@@ -198,7 +210,6 @@ service cloud.firestore {
                       && request.resource.data.estado in ['nuevo','proceso','listo','entregado','cancelado']
                       && request.resource.data.folio == resource.data.folio
                       && request.resource.data.get('origen', '') == resource.data.get('origen', '')
-                      && request.resource.data.get('entrega', 'local') == resource.data.get('entrega', 'local')
                       && envioValido(request.resource.data)
                       && (
                         // (a) el update de siempre: solo estado y fecha confirmada. La
@@ -206,7 +217,8 @@ service cloud.firestore {
                         // las notas, quién lo creó o el propio correccionOpId (con el que
                         // se podría preparar el terreno para una corrección sin rastro).
                         ( request.resource.data.diff(resource.data).affectedKeys()
-                            .hasOnly(['estado','fechaComprometida'])
+                            .hasOnly(['estado','fechaComprometida','etapas'])
+                          && etapasValidas(request.resource.data)
                           // La lista blanca dice QUÉ se puede tocar, no CÓMO: sin esto se
                           // podía meter un mapa o un texto enorme en la fecha de un pedido
                           // ajeno y dejarlo mostrando "—" para siempre.
@@ -217,7 +229,7 @@ service cloud.firestore {
                              && cuadraTotal(request.resource.data)
                              && request.resource.data.diff(resource.data).affectedKeys()
                                   .hasOnly(['cliente','renglones','totalCent','subtotalPiezasCent',
-                                            'envioCobradoCent','correccionOpId']) )
+                                            'envioCobradoCent','entrega','ciudad','correccionOpId']) )
                       );
         // un pedido no se borra: se cancela, para que su historial de cobros siga
         // explicando el dinero que ya entró
@@ -246,6 +258,9 @@ service cloud.firestore {
                            .data.totalCent == request.resource.data.despues.totalCent
                       && request.resource.data.despues.cliente is string
                       && request.resource.data.despues.cliente.size() <= 60
+                      && request.resource.data.despues.entrega in ['local','foraneo']
+                      && request.resource.data.despues.ciudad is string
+                      && request.resource.data.despues.ciudad.size() <= 60
                       && request.resource.data.motivo is string
                       && request.resource.data.motivo.size() > 0
                       && request.resource.data.motivo.size() <= 120
@@ -395,11 +410,15 @@ service cloud.firestore {
         // cuentas. El largo de CADA cuenta (60 bytes) no se puede exigir aquí — las reglas
         // no saben recorrer los elementos de una lista — así que eso lo recorta el cliente
         // (cortarBytes()) antes de guardar; esto solo pone un techo al tamaño de la lista.
+        // `cuentas` y `etapas` son los dos catálogos con forma conocida: una lista de 1 a
+        // 12. Cualquier otro documento de config se acepta tal cual (hoy no existe ninguno).
         allow create, update: if esDuena()
-                              && (doc != 'cuentas'
+                              && (!(doc in ['cuentas','etapas'])
                                   || (request.resource.data.lista is list
                                       && request.resource.data.lista.size() >= 1
                                       && request.resource.data.lista.size() <= 12));
+        // Borrar `config/etapas` equivale a "volver a las de siempre" (el cliente cae al
+        // default cuando el documento no existe). Es decisión de la dueña y es reversible.
         allow delete: if esDuena();
       }
 
