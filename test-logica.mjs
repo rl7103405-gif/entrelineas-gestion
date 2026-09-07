@@ -40,7 +40,10 @@ const api = new Function('estado', fuente + `
           envioDe, piezasDe, anticipoSugerido, ENVIO_INICIAL_CENT, envioSugerido,
           // etapas por pedido y filtros (7-sep-2026, noche)
           ETAPAS_DEFAULT, ETAPAS_MAX, FILTROS_PEDIDOS_DEFAULT, catalogoEtapas, plantillaEtapas,
-          etapasDe, progresoEtapas, filtrarPedidos, hayFiltrosActivos};
+          etapasDe, progresoEtapas, filtrarPedidos, hayFiltrosActivos,
+          // saldo por cuenta, traspasos y ajustes (7-sep-2026, noche)
+          CUENTAS_DEFAULT, idDeCuenta, nombreDeCuenta, cuentasDeCobro, cuentasVivas,
+          saldosPorCuenta, saldoTotal};
 `);
 
 // ── utilidades de prueba ───────────────────────────────────────
@@ -706,6 +709,89 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
       tarde.texto === 'lista, ya debió entregarla' && tarde.rango === 1);
   chk('y un pedido NO listo con la fecha pasada si dice que se paso',
       t.urgencia({estado:'proceso', fechaComprometida:'2026-01-01', entrega:'local'}).texto === 'se pasó la fecha');
+}
+
+// -- saldo por cuenta, traspasos y ajustes (7-sep-2026, noche) -----------
+// Elita: "puse que salio de la de Gaby y siguen apareciendo los 500". No era captura: la
+// tarjeta sumaba solo cobros. Casos borde que Codex pidio dejar probados.
+{
+  const base = () => ({pedidos: [], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: [],
+                       movsCuenta: [], catalogo: {piezas: [], cuentas: [], etapas: []}});
+  const estados = new Map();
+  const arma = (extra) => { const e = {...base(), ...extra}; const t = api(e); estados.set(t, e); return t; };
+  const S = (t, id) => (t.saldosPorCuenta(estados.get(t)).find(c => c.id === id) || {saldo: NaN}).saldo;
+
+  const t1 = arma({cobros: [{tipo:'pago', cuenta:'Nu \u00b7 Gaby', montoCent: 50000, fecha:'2026-09-07'}],
+                   gastos: [{cuenta:'Nu \u00b7 Gaby', montoCent: 46000, fecha:'2026-09-07'}]});
+  chk('cobro 500 y gasto 460 en Nu dejan 40, no 500', S(t1, 'c_nu') === 4000);
+  chk('las cuentas del catalogo salen aunque esten en cero',
+      t1.saldosPorCuenta(estados.get(t1)).map(c => c.id).join(',') === 'c_nu,c_banbajio,c_efectivo');
+
+  const t2 = arma({cobros: [{tipo:'pago', cuenta:'efectivo', montoCent: 1057700, fecha:'2026-08-01'}],
+                   movsCuenta: [{tipo:'traspaso', deId:'c_efectivo', aId:'c_nu', montoCent: 1057700, fecha:'2026-08-10'}]});
+  chk('traspasar 10,577 de efectivo a Nu: efectivo baja', S(t2, 'c_efectivo') === 0);
+  chk('y Nu sube lo mismo', S(t2, 'c_nu') === 1057700);
+  chk('el total de todas las cuentas no cambia con un traspaso',
+      t2.saldoTotal(t2.saldosPorCuenta(estados.get(t2))) === 1057700);
+
+  const t3 = arma({cobros: [{tipo:'pago', cuenta:'Banbaj\u00edo \u00b7 Marce', montoCent: 50000, fecha:'2026-09-07'},
+                            {tipo:'reversion', cuenta:'Banbaj\u00edo \u00b7 Marce', montoCent: 50000, fecha:'2026-09-07'}]});
+  chk('una reversion deja la cuenta como estaba', S(t3, 'c_banbajio') === 0);
+
+  const t4 = arma({cobros: [{tipo:'pago', cuenta:'Nu \u00b7 Gaby', montoCent: 4000, fecha:'2026-09-07'}],
+                   movsCuenta: [{tipo:'ajuste', cuentaId:'c_nu', deltaCent: -4000, fecha:'2026-09-07', motivo:'x'}]});
+  chk('un ajuste negativo baja la cuenta a cero', S(t4, 'c_nu') === 0);
+
+  const t5 = arma({movsCuenta: [{tipo:'traspaso', deId:'c_efectivo', aId:'c_nu', montoCent: 100, fecha:'2026-09-07'}]});
+  chk('mover mas de lo que hay deja la cuenta en negativo visible', S(t5, 'c_efectivo') === -100);
+
+  const t6 = arma({catalogo: {piezas: [], etapas: [], cuentas: [{id:'c_nu', nombre:'NU Gaby', alias:['Nu \u00b7 Gaby']}]},
+                   cobros: [{tipo:'pago', cuenta:'Nu \u00b7 Gaby', montoCent: 100, fecha:'2026-09-07'},
+                            {tipo:'pago', cuentaId:'c_nu', cuenta:'NU Gaby', montoCent: 200, fecha:'2026-09-07'}]});
+  chk('renombrar una cuenta no parte su saldo (alias)', S(t6, 'c_nu') === 300);
+  chk('y el nombre que se muestra es el nuevo',
+      t6.saldosPorCuenta(estados.get(t6)).find(c => c.id === 'c_nu').nombre === 'NU Gaby');
+
+  const t7 = arma({cobros: [{tipo:'pago', cuenta:'efectivo', montoCent: 100, fecha:'2026-09-01'},
+                            {tipo:'pago', cuenta:'efectivo', montoCent: 900, fecha:'2026-12-25'}]});
+  chk('el saldo a una fecha no cuenta lo posterior',
+      t7.saldosPorCuenta(estados.get(t7), new Date(2026, 8, 30)).find(c => c.id === 'c_efectivo').saldo === 100);
+  chk('sin fecha, cuenta todo', S(t7, 'c_efectivo') === 1000);
+
+  const t8 = arma({cobros: [{tipo:'pago', cuenta:'Tarjeta vieja', montoCent: 700, fecha:'2026-09-07'}]});
+  const raro = t8.saldosPorCuenta(estados.get(t8)).find(c => c.id === 'sin:Tarjeta vieja');
+  chk('un cobro con cuenta desconocida no se pierde', !!raro && raro.saldo === 700 && raro.nombre === 'Tarjeta vieja');
+
+  const arch = [{id:'c_nu', nombre:'Nu', alias:[], archivada:true}, {id:'c_efectivo', nombre:'efectivo', alias:[]}];
+  const t9 = arma({catalogo: {piezas: [], etapas: [], cuentas: arch},
+                   cobros: [{tipo:'pago', cuentaId:'c_nu', cuenta:'Nu', montoCent: 5, fecha:'2026-09-07'}]});
+  chk('una cuenta archivada con saldo sigue apareciendo', S(t9, 'c_nu') === 5);
+  const t10 = arma({catalogo: {piezas: [], etapas: [], cuentas: arch}});
+  chk('y una archivada en cero, no', !t10.saldosPorCuenta(estados.get(t10)).some(c => c.id === 'c_nu'));
+
+  const t11 = arma({cobros: [{tipo:'pago', cuenta: null, montoCent: 'x', fecha:'2026-09-07'}],
+                    movsCuenta: [{tipo:'traspaso', deId: 7, aId: null, montoCent: NaN, fecha:'2026-09-07'}, null, {tipo:'ajuste'}]});
+  let ok = true; try { t11.saldosPorCuenta(estados.get(t11)); } catch (e) { ok = false; }
+  chk('movimientos corruptos no tumban el saldo', ok);
+
+  chk('idDeCuenta prefiere el id guardado', t1.idDeCuenta({cuentaId:'c_efectivo', cuenta:'Nu \u00b7 Gaby'}) === 'c_efectivo');
+  chk('sin id resuelve por nombre', t1.idDeCuenta({cuenta:'efectivo'}) === 'c_efectivo');
+  chk('sin nada, vacio', t1.idDeCuenta({}) === '' && t1.idDeCuenta(null) === '');
+
+  // dos nombres del catalogo VIEJO que al quitarles simbolos quedan iguales no pueden
+  // terminar en la misma cuenta: eso fusionaria el dinero de dos cuentas reales (critico
+  // del code-reviewer). El listener desambigua; aqui se prueba que idDeCuenta los separa.
+  const t12 = arma({catalogo: {piezas: [], etapas: [], cuentas: [
+      {id:'c_NuGaby', nombre:'Nu · Gaby', alias:[]},
+      {id:'c_NuGaby1', nombre:'NuGaby', alias:[]}]},
+    cobros: [{tipo:'pago', cuenta:'Nu · Gaby', montoCent: 100, fecha:'2026-09-07'},
+             {tipo:'pago', cuenta:'NuGaby', montoCent: 900, fecha:'2026-09-07'}]});
+  chk('dos cuentas de nombre parecido NO se fusionan', S(t12, 'c_NuGaby') === 100 && S(t12, 'c_NuGaby1') === 900);
+
+  const dia = t1.agruparPorDia([{fecha:'2026-09-07', grupo:'entro', monto: 100},
+                                {fecha:'2026-09-07', grupo:'cuenta', monto: 5000},
+                                {fecha:'2026-09-07', grupo:'salio', monto: 30}])[0];
+  chk('un traspaso no suma al subtotal del dia', dia.entro === 100 && dia.salio === 30 && dia.movs.length === 3);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total

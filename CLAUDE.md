@@ -333,6 +333,65 @@ cambió el diseño de las etapas antes de escribirlo, y no se re-discute:
   resta los 3 días) hacía salir como vencido un pedido que se entrega en tres días solo
   porque ya debió salir del taller. Eso es urgencia, y para eso está el otro filtro.
 
+## Saldo por cuenta, traspasos y ajustes (7-sep-2026, noche)
+
+Elita, por audio: *"necesitamos poder mover el dinero entre nuestras cuentas"*, *"puse que
+salió de la de Gaby y siguen apareciendo los 500"*, y *"un botón para actualizar las cuentas,
+porque creo que había más dinero del que en realidad hay"*. Lo segundo **no era un error de
+captura**: la tarjeta de movimientos se llamaba "En qué cuenta entró" y sumaba SOLO cobros,
+así que un gasto de esa cuenta no se veía. Codex aprobó el modelo con cinco cambios; los
+cinco entraron. Para no re-discutir:
+
+- **Las cuentas tienen un ID que no cambia** (`c_nu`, `c_banbajio`, `c_efectivo`; `c_` + opId
+  las nuevas) y un nombre visible que sí. Antes la cuenta ERA su nombre, y con saldo por
+  cuenta eso se rompe: renombrar "Nu · Gaby" partiría el dinero en dos saldos. Los
+  movimientos nuevos guardan `cuentaId` **y** `cuenta` (el nombre, como respaldo). Los
+  viejos, que solo traen nombre, se resuelven con `idDeCuenta()` contra el nombre actual y
+  los `alias`; al renombrar, el editor guarda el nombre anterior como alias solo. **Ningún
+  movimiento se reescribe.** Un nombre que no coincide con nada cae en su propia fila
+  (`sin:<nombre>`) con una pastilla: un peso sin dueño se ve, nunca se pierde.
+- **`config/cuentas` acepta las dos formas**: la lista de strings de antes y la lista de
+  `{id, nombre, alias, archivada}`. A un string se le deriva un id de su nombre; en cuanto la
+  dueña guarde una vez, quedan con id de verdad. El editor ya no es un textarea (no distingue
+  "renombré" de "borré y agregué"): es por renglones, muestra el saldo de cada cuenta y **no
+  deja quitar una que tenga dinero**.
+- **El saldo NO se guarda, se deriva** (`saldosPorCuenta()`): cobros (con `montoCobro`, que
+  resta reversiones) − gastos + traspasos que entran − los que salen + ajustes. Es la regla
+  dura de siempre. **Es un saldo a una fecha**, no del periodo: en el periodo corriente,
+  hoy; en uno pasado, al cierre de ese periodo. Convive con el resultado del periodo de
+  arriba —que ahora se llama así y ya no "te queda"— porque miden cosas distintas: "resultado
+  de septiembre $2,000" y "en las cuentas $18,500" pueden ser ciertos a la vez.
+- **`movsCuenta` es un libro inmutable** como `cobros`: `opId` como id del documento, solo
+  `operaDinero()`, update y delete cerrados. Dos formas exclusivas: `traspaso` (`deId` y
+  `aId` distintos, `montoCent` > 0, nota ≤ 60) y `ajuste` (`cuentaId`, `deltaCent` ≠ 0 que
+  **puede ser negativo**, `motivo` obligatorio ≤ 80, `saldoObservadoCent`). Un traspaso es UN
+  documento: con dos escrituras, media falla dejaba el dinero saliendo de una cuenta sin
+  entrar a la otra.
+- **El ajuste pide el saldo real, no la diferencia.** La app dice "hay X", la persona escribe
+  lo que ve en el banco, y se guarda el delta. Se **recalcula al guardar**, no con lo que se
+  vio al abrir. Y solo se ofrece con `cobros`, `gastos`, `movsCuenta` y `cuentas` cargados:
+  un delta calculado con libros a medias queda guardado para siempre. Eso no contradice "un
+  aviso nunca bloquea" — no es un aviso de negocio, es no hacer cuentas con información
+  incompleta. `saldoObservadoCent` se guarda porque es una observación externa, no un saldo
+  derivable.
+- **Un traspaso o un ajuste NO es venta ni gasto.** No entra en `totalesEn()`, no toca el
+  pastel del resumen, y en el historial va en grupo `cuenta`: se lista, pero no suma al
+  subtotal del día.
+- **Idempotencia por tipo.** `escribirIdempotente()` compara `deId/aId/montoCent/fecha` en un
+  traspaso y `cuentaId/deltaCent/fecha` en un ajuste: con la lista genérica de antes, un
+  reintento con datos distintos habría dicho "ya estaba".
+- **Borrar un gasto ahora significa "nunca debió registrarse"**, y el diálogo lo dice: con
+  saldo por cuenta, borrar un gasto real sube la cuenta como si el dinero hubiera regresado.
+- **`porCuentaDe()` no se tocó**: alimenta "A qué cuenta entró" del resumen, que sigue siendo
+  cobros del periodo. El saldo es otra función a propósito.
+
+**Riesgo aceptado:** las reglas no pueden comprobar que `cuentaId` exista en el catálogo (no
+recorren listas); la app solo ofrece las que existen y un id desconocido se muestra aparte.
+Tampoco se exige `creadoEn == request.time`, por la misma razón que en la auditoría de
+pedidos. **Decisión de negocio pendiente:** Elita mencionó BBVA y el catálogo no la tiene
+(Gaby dijo el 2-sep que con esa paga impuestos y no recibe ventas). Si la usan, la dueña la
+agrega desde el editor; no se agregó por adivinar.
+
 **Riesgos aceptados a conciencia:** el reintento tras recargar la página no es idempotente
 (el `opId` se pierde con la recarga); `fechaValida` de las reglas deja pasar el 31 de febrero
 (la app lo frena); las credenciales de `verificar-reglas.mjs` viven en claro en el disco de

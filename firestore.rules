@@ -73,6 +73,19 @@ service cloud.firestore {
       function cuentaValida(c) {
         return c is string && c.size() > 0 && c.size() <= 60;
       }
+      // El id de una cuenta no cambia aunque le cambien el nombre: es lo que impide que
+      // renombrar "Nu · Gaby" parta su saldo en dos. No se puede comprobar aquí que esté en
+      // el catálogo (las reglas no recorren listas); eso lo hace la app al ofrecer solo las
+      // cuentas que existen, y un id desconocido se muestra aparte en vez de perderse.
+      function cuentaIdValido(id) {
+        return id is string && id.matches('^c_[A-Za-z0-9]{1,32}$');
+      }
+      // En cobros y gastos el cuentaId es OPCIONAL (los movimientos viejos no lo tienen),
+      // pero si viene tiene que tener forma: un cuentaId basura mandaría ese dinero a una
+      // cuenta inventada al calcular el saldo.
+      function cuentaIdOpcionalValido(d) {
+        return !('cuentaId' in d) || cuentaIdValido(d.cuentaId);
+      }
       // quien registra un movimiento de dinero no puede firmarlo como otra persona
       function firmadoPorMi(campo) {
         return request.resource.data.get(campo, '') == request.auth.uid;
@@ -328,11 +341,59 @@ service cloud.firestore {
                       && request.resource.data.tipo in ['pago','reversion']
                       && montoValido(request.resource.data.montoCent)
                       && cuentaValida(request.resource.data.cuenta)
+                      && cuentaIdOpcionalValido(request.resource.data)
                       && fechaValida(request.resource.data.fecha)
                       && firmadoPorMi('registradoPor')
                       && ( (request.resource.data.tipo == 'pago' && !id.matches('^rev-.*'))
                         || (request.resource.data.tipo == 'reversion' && reversionValida(id)) );
         allow update, delete: if false;   // se corrige con una reversión, no editando
+      }
+
+      // ── MOVIMIENTOS ENTRE CUENTAS: inmutable ──────────────────
+      // Mover dinero de una cuenta a otra (Marcela le entrega a Gaby lo del cierre) y
+      // ajustar una cuenta al saldo real. Ninguno es venta ni gasto: el negocio no gana ni
+      // pierde, el dinero solo cambia de lugar o se reconoce lo que ya había.
+      //
+      // Un traspaso es UN documento, no dos: si fueran dos escrituras, media falla dejaría
+      // el dinero saliendo de una cuenta sin entrar a la otra.
+      //
+      // El saldo de una cuenta NO se guarda en ningún lado: se deriva de cobros, gastos y
+      // esta colección. Por eso aquí basta con que cada movimiento tenga forma válida.
+      match /movsCuenta/{id} {
+        allow read:   if esMiembro();
+        allow create: if operaDinero()
+                      && idempotente(id)
+                      && firmadoPorMi('registradoPor')
+                      && fechaValida(request.resource.data.fecha)
+                      && (
+                        // mover de una cuenta a otra: dos cuentas distintas y un monto real
+                        ( request.resource.data.tipo == 'traspaso'
+                          && cuentaIdValido(request.resource.data.deId)
+                          && cuentaIdValido(request.resource.data.aId)
+                          && request.resource.data.deId != request.resource.data.aId
+                          && montoValido(request.resource.data.montoCent)
+                          && cuentaValida(request.resource.data.de)
+                          && cuentaValida(request.resource.data.a)
+                          && request.resource.data.get('nota', '') is string
+                          && request.resource.data.get('nota', '').size() <= 60 )
+                        // ajustar al saldo real: el delta PUEDE ser negativo (esa es la
+                        // gracia), nunca cero, y el motivo es obligatorio — un ajuste sin
+                        // explicación es un descuadre escondido.
+                        || ( request.resource.data.tipo == 'ajuste'
+                          && cuentaIdValido(request.resource.data.cuentaId)
+                          && cuentaValida(request.resource.data.cuenta)
+                          && request.resource.data.deltaCent is int
+                          && request.resource.data.deltaCent != 0
+                          && request.resource.data.deltaCent > -100000000
+                          && request.resource.data.deltaCent < 100000000
+                          && request.resource.data.get('saldoObservadoCent', 0) is int
+                          && request.resource.data.motivo is string
+                          && request.resource.data.motivo.size() > 0
+                          && request.resource.data.motivo.size() <= 80 )
+                      );
+        // Se corrige con otro movimiento, igual que los cobros: un traspaso al revés, o un
+        // ajuste nuevo. Editar o borrar dejaría el saldo sin explicación.
+        allow update, delete: if false;
       }
 
       // ── LIBRO DE INVENTARIO: inmutable ────────────────────────

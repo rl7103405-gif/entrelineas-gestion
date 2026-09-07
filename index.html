@@ -581,6 +581,39 @@ const ETAPAS_MAX = 12;   // mismo techo que las reglas (`etapas` es un mapa de h
 // Filtros de la lista de pedidos. Viven fuera del DOM para sobrevivir a los repintados.
 const FILTROS_PEDIDOS_DEFAULT = {estado:'abiertos', entrega:'todos', urgencia:'todos',
                                  cuando:'todas', origen:'todos', etapa:'todas'};
+
+// ── Las cuentas donde vive el dinero (7-sep-2026) ─────────────
+// Cada cuenta tiene un ID QUE NO CAMBIA y un nombre visible que sí. Antes la cuenta ERA su
+// nombre, y desde que hay saldo por cuenta eso se rompe: renombrar "Nu · Gaby" a "NU Gaby"
+// partiría una sola cuenta en dos saldos, cada uno con la mitad del dinero. Lo cazó Codex.
+// `alias` guarda los nombres que tuvo antes, para que los movimientos ya capturados —que
+// guardaron el nombre tal cual— sigan cayendo en su cuenta. Ninguno se reescribe.
+const CUENTAS_DEFAULT = [
+  {id:'c_nu',       nombre:'Nu · Gaby',        alias:[]},
+  {id:'c_banbajio', nombre:'Banbajío · Marce', alias:[]},
+  {id:'c_efectivo', nombre:'efectivo',         alias:[]}
+];
+const CUENTAS_MAX = 12;
+// Un movimiento viejo (o uno capturado mientras el catálogo no había llegado) trae solo el
+// nombre. Se resuelve contra el nombre actual y contra los alias; si no coincide con
+// ninguno, NO se pierde: cae en su propia fila y se ve. Un peso sin dueño se muestra.
+function idDeCuenta(mov, cuentas = cuentasDeCobro()) {
+  if (mov && typeof mov.cuentaId === 'string' && mov.cuentaId) return mov.cuentaId;
+  const nombre = String(mov?.cuenta ?? '').trim();
+  if (!nombre) return '';
+  const c = cuentas.find(x => x.nombre === nombre || (x.alias || []).includes(nombre));
+  return c ? c.id : 'sin:' + nombre;
+}
+const nombreDeCuenta = (id, cuentas = cuentasDeCobro()) =>
+  (cuentas.find(c => c.id === id) || {}).nombre || (String(id).startsWith('sin:') ? String(id).slice(4) : id);
+function cuentasDeCobro() {
+  const lista = estado.catalogo.cuentas;
+  return Array.isArray(lista) && lista.length ? lista : CUENTAS_DEFAULT;
+}
+// Cuentas para ELEGIR al capturar: las del catálogo. Las archivadas no se ofrecen, pero si
+// les queda dinero siguen viéndose en los saldos (una cuenta con saldo no desaparece).
+const cuentasVivas = () => cuentasDeCobro().filter(c => !c.archivada);
+
 const ROLES = {duena:'dueña', socia:'socia', apoyo:'apoyo'};
 // De dónde llegó el pedido. Marcela (junta del 2-sep-2026): "agregar un apartado que sea
 // que lo pidieron a través de la publicidad, para ver qué tal" — meten dinero en anuncios
@@ -591,6 +624,7 @@ const ORIGENES = {instagram:'Instagram', anuncio:'anuncio pagado', recomendacion
 const estado = {
   usuario: null, miembro: null,
   pedidos: [], cobros: [], materiales: [], invMovs: [], gastos: [], tareas: [], miembros: [],
+  movsCuenta: [],
   catalogo: {piezas: [], cuentas: [], etapas: []},
   cargado: {}
 };
@@ -648,6 +682,58 @@ function envioSugerido() {
 // La regla "una reversión resta" vivía copiada en cinco reduces distintos: corregirla en
 // cuatro y dejar el quinto mintiendo ya pasó. De aquí para adelante solo vive aquí.
 const montoCobro = c => c.tipo === 'reversion' ? -(c.montoCent||0) : (c.montoCent||0);
+// ── Saldo de cada cuenta (7-sep-2026) ─────────────────────────
+// Elita: "necesitamos poder mover el dinero entre nuestras cuentas" y "puse que salió de la
+// de Gaby y siguen apareciendo los 500". Lo segundo no era un error de captura: la tarjeta
+// de esta pantalla sumaba SOLO cobros, así que un gasto de la misma cuenta no se veía.
+//
+// El saldo NO se guarda, se deriva: cobros − gastos + traspasos que entran − los que salen
+// + ajustes. Es la misma regla dura de siempre; lo único que no se puede derivar es de
+// dónde partió cada cuenta, y eso entra como un AJUSTE fechado con su motivo, no como un
+// campo editable — así nunca se reescribe el pasado.
+//
+// `hasta` es un Date: el saldo es a una fecha, no del periodo. "Cuánto hay en Nu" no
+// depende de si estás mirando la semana o el mes.
+function saldosPorCuenta(estado, hasta = null) {
+  const cuentas = cuentasDeCobro();
+  const antes = f => esFechaValida(f) && (!hasta || fechaLocal(f) < hasta);
+  const m = new Map();
+  const toca = (id, campo, monto) => {
+    if (!id || !Number.isFinite(monto)) return;
+    if (!m.has(id)) m.set(id, {id, nombre: nombreDeCuenta(id, cuentas),
+                              entro: 0, salio: 0, traspasos: 0, ajustes: 0, saldo: 0});
+    const c = m.get(id); c[campo] += monto;
+  };
+  // Las cuentas del catálogo salen aunque no tengan un solo movimiento: "no hay nada aquí"
+  // es información, y una cuenta que no aparece se lee como una cuenta que no existe.
+  cuentas.filter(c => !c.archivada).forEach(c => toca(c.id, 'entro', 0));
+  estado.cobros.filter(c => c && antes(c.fecha)).forEach(c => toca(idDeCuenta(c, cuentas), 'entro', montoCobro(c)));
+  estado.gastos.filter(g => g && antes(g.fecha)).forEach(g => toca(idDeCuenta(g, cuentas), 'salio', g.montoCent || 0));
+  // el `x &&` no sobra: un documento corrupto en la lista tumbaba el saldo entero, y con
+  // el saldo caído no se ve NADA de dinero. Aquí un dato roto se ignora y lo demás se ve.
+  (estado.movsCuenta || []).filter(x => x && antes(x.fecha)).forEach(x => {
+    if (x.tipo === 'traspaso') {
+      const monto = Number.isFinite(x.montoCent) ? x.montoCent : 0;
+      toca(idDeCuenta({cuentaId: x.deId, cuenta: x.de}, cuentas), 'traspasos', -monto);
+      toca(idDeCuenta({cuentaId: x.aId, cuenta: x.a}, cuentas), 'traspasos', monto);
+    } else if (x.tipo === 'ajuste' && Number.isFinite(x.deltaCent)) {
+      toca(idDeCuenta({cuentaId: x.cuentaId, cuenta: x.cuenta}, cuentas), 'ajustes', x.deltaCent);
+    }
+  });
+  // `fuera` marca lo que no está en el catálogo de hoy: un nombre viejo que ya nadie usa,
+  // o un id escrito por fuera de la app. No se esconde: se enseña con su etiqueta.
+  const enCatalogo = new Set(cuentas.map(c => c.id));
+  m.forEach(c => { c.saldo = c.entro - c.salio + c.traspasos + c.ajustes; c.fuera = !enCatalogo.has(c.id); });
+  // Orden: como están en el catálogo; las que no están (cuentas viejas sin identificar), al
+  // final. Una cuenta archivada o desconocida solo aparece si le queda dinero.
+  const pos = new Map(cuentas.map((c, i) => [c.id, i]));
+  return [...m.values()]
+    .filter(c => pos.has(c.id) ? !cuentas[pos.get(c.id)].archivada || c.saldo !== 0 : c.saldo !== 0)
+    .sort((a, b) => (pos.has(a.id) ? pos.get(a.id) : 900) - (pos.has(b.id) ? pos.get(b.id) : 900)
+                    || a.nombre.localeCompare(b.nombre));
+}
+const saldoTotal = saldos => saldos.reduce((s, c) => s + c.saldo, 0);
+
 function porCuentaDe(cobros) {
   const m = new Map();
   cobros.forEach(c => { const k = c.cuenta || 'sin especificar'; m.set(k, (m.get(k)||0) + montoCobro(c)); });
@@ -1064,15 +1150,27 @@ function movimientosDe(estado, desde, hasta) {
   const en = f => esFechaValida(f) && fechaLocal(f) >= desde && fechaLocal(f) < hasta;
   const pedidoDe = id => estado.pedidos.find(p => p.id === id);
   return [
-    ...estado.cobros.filter(c => en(c.fecha)).map(c => {
+    ...estado.cobros.filter(c => c && en(c.fecha)).map(c => {
       const p = pedidoDe(c.pedidoId), rev = c.tipo === 'reversion';
       return { fecha: c.fecha, grupo: 'entro', monto: montoCobro(c),
                titulo: (rev ? 'corrección de pago' : 'pago') + (p ? ' · ' + (p.cliente?.nombre || p.folio || '') : ''),
                meta: [c.cuenta || '', p && p.folio ? p.folio : ''].filter(Boolean).join(' · ') };
     }),
-    ...estado.gastos.filter(g => en(g.fecha)).map(g => ({
+    ...estado.gastos.filter(g => g && en(g.fecha)).map(g => ({
       fecha: g.fecha, grupo: 'salio', monto: g.montoCent || 0, gastoId: g.id,
-      titulo: g.concepto || 'gasto', meta: NOMBRE_CATEGORIA[g.categoria] || g.categoria || '' }))
+      titulo: g.concepto || 'gasto', meta: NOMBRE_CATEGORIA[g.categoria] || g.categoria || '' })),
+    // Un traspaso o un ajuste NO es venta ni gasto —el negocio no ganó ni perdió—, así que
+    // va en su propio grupo: no entra en "entró" ni en "salió" y no toca el resumen.
+    ...(estado.movsCuenta || []).filter(x => x && en(x.fecha)).map(x => x.tipo === 'traspaso'
+      ? { fecha: x.fecha, grupo: 'cuenta', subtipo: 'traspaso', monto: x.montoCent || 0,
+          titulo: 'movido entre cuentas',
+          meta: [(x.de || '') + ' → ' + (x.a || ''), x.nota || ''].filter(Boolean).join(' · ') }
+      // un `tipo` que no sea ninguno de los dos es un dato roto: se omite en vez de
+      // enseñarse como "ajuste", que sería mentir sobre lo que pasó
+      : x.tipo === 'ajuste'
+      ? { fecha: x.fecha, grupo: 'cuenta', subtipo: 'ajuste', monto: x.deltaCent || 0,
+          titulo: 'ajuste de ' + (x.cuenta || 'una cuenta'), meta: x.motivo || '' }
+      : null).filter(Boolean)
   ].sort((a,b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 // Un encabezado por día con lo que entró y lo que salió ese día, por separado: el neto
@@ -1083,7 +1181,9 @@ function agruparPorDia(movs) {
   movs.forEach(m => {
     if (!dias.has(m.fecha)) dias.set(m.fecha, {fecha: m.fecha, movs: [], entro: 0, salio: 0});
     const d = dias.get(m.fecha); d.movs.push(m);
-    if (m.grupo === 'salio') d.salio += m.monto; else d.entro += m.monto;
+    // un traspaso o un ajuste (grupo 'cuenta') no es dinero que entró ni que salió del
+    // negocio: se lista, pero no suma al subtotal del día
+    if (m.grupo === 'salio') d.salio += m.monto; else if (m.grupo === 'entro') d.entro += m.monto;
   });
   return [...dias.values()].sort((a,b) => b.fecha.localeCompare(a.fecha));
 }
@@ -1336,17 +1436,47 @@ function pintarDinero() {
       <div class="monto ${t.cobrado < 0 ? 'neg' : 'pos'}" style="font-size:26px">${dinero(t.cobrado)}</div></div>
     <div class="tarjeta"><div class="sub">salió</div>
       <div class="monto neg" style="font-size:26px">${dinero(t.gastado)}</div></div>
-    <div class="tarjeta"><div class="sub">te queda</div>
+    <div class="tarjeta"><div class="sub">resultado del periodo</div>
       <div class="monto ${t.balance < 0 ? 'neg' : ''}" style="font-size:26px">${dinero(t.balance)}</div></div>`;
 
-  // Por cuenta: Gaby dijo que a veces le cae a su tarjeta y a veces a la de Marce.
-  const porCuenta = porCuentaDe(t.cobros);
+  // Dos cosas distintas que antes se confundían (lo señaló Codex): arriba, lo que pasó EN
+  // EL PERIODO; aquí abajo, cuánto hay AHORA en cada cuenta — que incluye lo de antes de
+  // usar la app y los ajustes. Que "resultado de septiembre: $2,000" y "en las cuentas:
+  // $18,500" convivan no es una contradicción, son dos preguntas distintas.
+  const listo = estado.cargado.cobros && estado.cargado.gastos && estado.cargado.movsCuenta;
+  const saldos = listo ? saldosPorCuenta(estado, movOffset < 0 ? r.hasta : null) : [];
+  const alCierre = movOffset < 0;
   $('detalle-dinero').innerHTML = `
-    <div class="tarjeta"><h3 style="font-size:18px;margin-bottom:8px">En qué cuenta entró</h3>
-      ${porCuenta.size ? `<ul class="lista">` + [...porCuenta].map(([k,v]) =>
-        `<li class="reng"><div class="reng-cuerpo">${esc(k)}</div>
-          <div class="reng-lado monto">${dinero(v)}</div></li>`).join('') + `</ul>`
-        : `<p class="vacio">Sin cobros en ${esc(r.titulo)}.</p>`}</div>`;
+    <div class="tarjeta">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <h3 style="font-size:18px">Cómo va cada cuenta</h3>
+        ${operaDinero() ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn linea chico" id="btn-traspaso">mover dinero</button>
+          <button class="btn linea chico" id="btn-ajuste">ajustar saldo</button></div>` : ''}
+      </div>
+      <p class="nota" style="margin-bottom:8px">${alCierre
+        ? 'Lo que había al terminar ' + esc(r.titulo) + '.'
+        : 'Lo que hay hoy: todo lo que entró y salió desde el principio, no solo ' + esc(r.titulo) + '.'}</p>
+      ${!listo ? `<p class="vacio">Cargando las cuentas…</p>`
+        : saldos.length ? `<ul class="lista">` + saldos.map(c => `
+          <li class="reng">
+            <div class="reng-cuerpo">
+              <div class="reng-tit">${esc(c.nombre)}${c.fuera
+                ? ' <span class="pastilla p-ambar">cuenta que ya no está en la lista</span>' : ''}</div>
+              <div class="reng-meta">entró ${dinero(c.entro)} · salió ${dinero(c.salio)}${
+                c.traspasos ? ' · movido ' + (c.traspasos > 0 ? '+' : '−') + dinero(Math.abs(c.traspasos)) : ''}${
+                c.ajustes ? ' · ajuste ' + (c.ajustes > 0 ? '+' : '−') + dinero(Math.abs(c.ajustes)) : ''}</div>
+            </div>
+            <div class="reng-lado"><div class="monto ${c.saldo < 0 ? 'neg' : c.saldo > 0 ? 'pos' : ''}">${dinero(c.saldo)}</div></div>
+          </li>`).join('') + `</ul>
+          <div class="reng" style="border-bottom:0"><div class="reng-cuerpo"><b>en total</b></div>
+            <div class="reng-lado monto">${dinero(saldoTotal(saldos))}</div></div>`
+        : `<p class="vacio">Todavía no hay cuentas con movimiento.</p>`}
+    </div>`;
+  if (operaDinero() && $('btn-traspaso')) {
+    $('btn-traspaso').addEventListener('click', dialogoTraspaso);
+    $('btn-ajuste').addEventListener('click', dialogoAjuste);
+  }
 
   // El historial del periodo, agrupado por día y con el subtotal del día por separado
   // (lo que entró y lo que salió, no el neto). El tope se aplica por DÍAS COMPLETOS: un
@@ -1374,8 +1504,10 @@ function pintarDinero() {
         <div class="reng-cuerpo"><div class="reng-tit">${esc(m.titulo)}</div>
           ${m.meta ? `<div class="reng-meta">${esc(m.meta)}</div>` : ''}</div>
         <div class="reng-lado">
-          <div class="monto ${m.grupo === 'entro' && m.monto >= 0 ? 'pos' : 'neg'}">
-            ${m.grupo === 'salio' ? '−' + dinero(Math.abs(m.monto)) : conSigno(m.monto)}</div>
+          <div class="monto ${m.grupo === 'cuenta' ? '' : m.grupo === 'entro' && m.monto >= 0 ? 'pos' : 'neg'}">
+            ${m.grupo === 'salio' ? '−' + dinero(Math.abs(m.monto))
+              : m.subtipo === 'traspaso' ? '↔ ' + dinero(m.monto)
+              : conSigno(m.monto)}</div>
           ${m.gastoId && esDuena()
             ? `<button type="button" class="btn linea chico" data-borrar-gasto="${esc(m.gastoId)}" style="margin-top:4px;padding:2px 10px;font-size:12px">borrar</button>` : ''}
         </div>
@@ -2608,7 +2740,7 @@ $('btn-salir').addEventListener('click', async () => {
   // se quedaban en memoria y 'cargado' seguía en true hasta que llegara el primero nuevo.
   estado.cargado = {};
   estado.pedidos = []; estado.cobros = []; estado.materiales = []; estado.invMovs = [];
-  estado.gastos = []; estado.tareas = []; estado.miembros = [];
+  estado.gastos = []; estado.tareas = []; estado.miembros = []; estado.movsCuenta = [];
   estado.catalogo.cuentas = []; estado.catalogo.etapas = [];
   // Si no, la siguiente persona entra con los filtros de la anterior y ve una lista casi
   // vacía sin entender por qué.
@@ -2753,48 +2885,226 @@ function campoNum(id, etiqueta, extra = '') {
 // efectivo. La BBVA de Gaby se excluye a propósito: con esa paga impuestos y no recibe
 // ventas. Esto es solo el DEFAULT mientras la dueña no guarde su propia lista en
 // config/cuentas; en cuanto la guarde, manda la suya.
-const CUENTAS_DEFAULT = ['Nu · Gaby', 'Banbajío · Marce', 'efectivo'];
-function cuentasDeCobro() {
-  const lista = estado.catalogo.cuentas;
-  return Array.isArray(lista) && lista.length ? lista : CUENTAS_DEFAULT;
-}
 function selectCuentas(id, etiqueta = '¿en qué cuenta entró?') {
   // Gaby: "a veces son en mi tarjeta, a veces son las de Marce". Si no se registra dónde
   // cayó el dinero, la semana no cuadra nunca. Por eso NO hay opción "otra": guardaba la
   // palabra "otra" como cuenta y el peso quedaba sin dueño. Si falta una cuenta, la dueña
   // la agrega al catálogo y aparece aquí al instante.
-  const opciones = cuentasDeCobro().map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  const opciones = cuentasVivas().map(c => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('');
   return `<div class="campo"><label for="${id}">${esc(etiqueta)}</label>
     <select id="${id}">${opciones}</select>
     <p class="nota" style="margin-top:4px">¿Falta una cuenta? La dueña la agrega en <b>cuentas → cuentas de cobro</b>.</p></div>`;
 }
-// El editor del catálogo, solo para la dueña: una cuenta por renglón.
+// El editor del catálogo, solo para la dueña. Ya no es un textarea: cada cuenta tiene un id
+// que no se ve pero no puede cambiar, y un textarea no distingue "renombré esta" de "borré
+// una y agregué otra" — con saldos por cuenta, confundirlas parte el dinero en dos.
+// Al renombrar, el nombre anterior se guarda como alias para que los movimientos viejos
+// (que guardaron el nombre) sigan cayendo en su cuenta.
 function dialogoCuentas() {
   if (!esDuena()) { avisar('Solo la dueña cambia las cuentas'); return; }
-  // Sin esto, si se abre antes de que llegue el primer snapshot de config/cuentas, el
-  // textarea se prellena con CUENTAS_DEFAULT y guardarlo pisa la lista real que todavía
-  // no había llegado.
   if (!estado.cargado.cuentas) { avisar('Se están cargando las cuentas, intenta en un momento'); return; }
-  abrirDialogo('Cuentas de cobro', `
-    <p class="nota" style="margin-bottom:10px">Una por renglón, como quieras que se lean al
-      registrar un pago. Los pagos ya registrados conservan el nombre con el que se
-      capturaron aunque cambies la lista.</p>
-    <div class="campo"><textarea id="f-cuentas" rows="6">${esc(cuentasDeCobro().join('\n'))}</textarea></div>
-    <button class="btn" data-guardar style="width:100%">guardar cuentas</button>
+  const lista = cuentasDeCobro().map(c => ({...c, alias: [...(c.alias || [])]}));
+  const saldos = saldosPorCuenta(estado);
+  const saldoDe_ = id => (saldos.find(s => s.id === id) || {saldo: 0}).saldo;
+  const pintar = () => {
+    $('cu-lista').innerHTML = lista.map((c, i) => `<div class="etapa">
+      <input type="text" data-i="${i}" value="${esc(c.nombre)}" maxlength="60" style="flex:1;font-size:15px;padding:6px 10px">
+      <span class="nota" style="min-width:70px;text-align:right">${dinero(saldoDe_(c.id))}</span>
+      <button type="button" class="quitar" data-q="${i}" aria-label="quitar">×</button></div>`).join('')
+      + (lista.length < CUENTAS_MAX ? `<button type="button" class="btn linea chico" id="cu-nueva" style="margin-top:8px">+ otra cuenta</button>` : '');
+    $('cu-lista').querySelectorAll('[data-i]').forEach(inp =>
+      inp.addEventListener('input', () => { lista[+inp.dataset.i].nombre = inp.value; }));
+    $('cu-lista').querySelectorAll('[data-q]').forEach(b => b.addEventListener('click', () => {
+      const c = lista[+b.dataset.q];
+      // Quitar una cuenta con dinero dejaría ese dinero fuera de la suma sin decir nada.
+      if (saldoDe_(c.id) !== 0) { avisar('Esa cuenta todavía tiene ' + dinero(saldoDe_(c.id)) + ': muévelo o ajústalo antes de quitarla'); return; }
+      lista.splice(+b.dataset.q, 1); pintar();
+    }));
+    const nueva = $('cu-nueva');
+    if (nueva) nueva.addEventListener('click', () => { lista.push({id: 'c_' + nuevaOp(), nombre: '', alias: []}); pintar();
+      const inputs = $('cu-lista').querySelectorAll('[data-i]'); inputs[inputs.length - 1]?.focus(); });
+  };
+  abrirDialogo('Cuentas donde entra y sale el dinero', `
+    <p class="nota" style="margin-bottom:10px">Como quieras que se lean al registrar un pago.
+      Si le cambias el nombre a una, sus movimientos anteriores se quedan con ella: no se
+      parte el saldo.</p>
+    <div id="cu-lista"></div>
+    <button class="btn" data-guardar style="width:100%;margin-top:12px">guardar cuentas</button>
   `, async () => {
-    // Primero se recorta a 60 bytes y DESPUÉS se deduplica: al revés, dos nombres que solo
-    // difieren después del byte 60 pasaban como distintos y quedaban repetidos.
-    const renglones = $('f-cuentas').value.split('\n').map(s => cortarBytes(s.trim(), 60)).filter(Boolean);
-    const lista = [...new Set(renglones)];
-    if (!lista.length) { avisar('Deja al menos una cuenta'); return false; }
-    if (lista.length > 12) { avisar('Máximo 12 cuentas; quita ' + (lista.length - 12) + ' para poder guardar'); return false; }
+    const previas = new Map(cuentasDeCobro().map(c => [c.id, c]));
+    const limpia = lista.map(c => {
+      const nombre = cortarBytes(String(c.nombre || '').trim(), 60);
+      const antes = previas.get(c.id);
+      // el nombre viejo se conserva como alias, sin repetir y sin pasar de 6
+      const alias = antes && antes.nombre && antes.nombre !== nombre
+        ? [...new Set([antes.nombre, ...(c.alias || [])])].slice(0, 6) : (c.alias || []).slice(0, 6);
+      return {id: c.id, nombre, alias};
+    }).filter(c => c.nombre && /^c_[A-Za-z0-9]{1,30}$/.test(c.id));
+    if (!limpia.length) { avisar('Deja al menos una cuenta'); return false; }
+    if (limpia.length > CUENTAS_MAX) { avisar('Máximo ' + CUENTAS_MAX + ' cuentas'); return false; }
+    if (new Set(limpia.map(c => c.id)).size !== limpia.length) { avisar('Hay una cuenta repetida'); return false; }
+    if (new Set(limpia.map(c => c.nombre)).size !== limpia.length) { avisar('Hay dos cuentas con el mismo nombre'); return false; }
     try {
       await setDoc(doc(db, RAIZ + '/config', 'cuentas'), {
-        lista, actualizadoPor: estado.usuario.uid, actualizadoEn: serverTimestamp()
+        lista: limpia, actualizadoPor: estado.usuario.uid, actualizadoEn: serverTimestamp()
       });
       avisar('Cuentas guardadas');
     } catch (e) { console.error('cuentas', e); avisar(mensajeError(e)); return false; }
   });
+  pintar();
+}
+
+// ── Mover dinero de una cuenta a otra ──────────────────────────
+// El caso real está en el cuaderno de Marcela: "10,577 entregados a Gaby NU". Marcela cobra
+// en Banbajío, paga gastos de ahí, y cada tanto le pasa el neto a Gaby. Eso no es una venta
+// ni un gasto —el negocio no ganó ni perdió un peso—, por eso vive en su propia colección y
+// no toca el resumen. Un solo documento: si fueran dos escrituras, media falla dejaría el
+// dinero saliendo de una cuenta sin entrar a la otra.
+function dialogoTraspaso() {
+  if (!operaDinero()) { avisar('Los traspasos los registran Gaby y Marcela'); return; }
+  if (!estado.cargado.cuentas) { avisar('Se están cargando las cuentas, intenta en un momento'); return; }
+  const cuentas = cuentasVivas();
+  if (cuentas.length < 2) { avisar('Hacen falta al menos dos cuentas para mover dinero'); return; }
+  const opId = nuevaOp();
+  const opciones = (sel) => cuentas.map(c =>
+    `<option value="${esc(c.id)}"${c.id === sel ? ' selected' : ''}>${esc(c.nombre)}</option>`).join('');
+  abrirDialogo('Mover dinero entre cuentas', `
+    <p class="nota" style="margin-bottom:10px">Para cuando pasan dinero de una cuenta a otra
+      —por ejemplo, depositar a la cuenta del negocio lo que se cobró en efectivo—. No es una
+      venta ni un gasto: el dinero solo cambia de lugar.</p>
+    <div class="campo"><label for="f-tr-de">de esta cuenta sale</label>
+      <select id="f-tr-de">${opciones(cuentas[0].id)}</select></div>
+    <div class="campo"><label for="f-tr-a">y entra a esta</label>
+      <select id="f-tr-a">${opciones(cuentas[1].id)}</select></div>
+    ${campoNum('f-tr-monto','cuánto','min="0"')}
+    <p class="aviso falta" id="f-tr-aviso" hidden style="margin:-4px 0 12px"></p>
+    <div class="campo"><label for="f-tr-fecha">cuándo</label>
+      <input type="date" id="f-tr-fecha" value="${hoyISO()}"></div>
+    <div class="campo"><label for="f-tr-nota">nota (opcional)</label>
+      <input type="text" id="f-tr-nota" maxlength="60" placeholder="lo del cierre de la semana"></div>
+    <button class="btn" data-guardar style="width:100%">registrar</button>
+  `, async () => {
+    const deId = $('f-tr-de').value, aId = $('f-tr-a').value;
+    if (deId === aId) { avisar('Elige dos cuentas distintas'); return false; }
+    const montoCent = montoEnCentavos($('f-tr-monto').value);
+    if (montoCent === null) { avisar('Escribe cuánto vas a mover (menos de un millón)'); return false; }
+    const fecha = $('f-tr-fecha').value;
+    if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
+    try {
+      const r = await escribirIdempotente(doc(db, RAIZ + '/movsCuenta', opId), {
+        tipo: 'traspaso', deId, aId, de: nombreDeCuenta(deId), a: nombreDeCuenta(aId),
+        montoCent, fecha, nota: cortarBytes($('f-tr-nota').value.trim(), 60),
+        registradoPor: estado.usuario.uid, opId, creadoEn: serverTimestamp()
+      });
+      avisar(r === 'creado' ? 'Listo, el dinero ya cambió de cuenta' : 'Ese movimiento ya estaba registrado');
+    } catch (e) { console.error('traspaso', e); avisar(mensajeError(e)); return false; }
+  });
+  // Avisa si la cuenta de origen se queda en negativo, y si el mismo monto salió hoy como
+  // gasto de esa cuenta (sería contarlo dos veces). Avisa: nunca bloquea.
+  const aviso = $('f-tr-aviso');
+  const repasar = () => {
+    const c = montoEnCentavos($('f-tr-monto').value);
+    if (c === null) { aviso.hidden = true; return; }
+    const saldos = saldosPorCuenta(estado);
+    const origen = saldos.find(x => x.id === $('f-tr-de').value);
+    const quedaria = (origen ? origen.saldo : 0) - c;
+    const dobleConteo = estado.gastos.some(g => (g.montoCent || 0) === c
+      && idDeCuenta(g) === $('f-tr-de').value && g.fecha === $('f-tr-fecha').value);
+    const partes = [];
+    if (quedaria < 0) partes.push('Con esto ' + nombreDeCuenta($('f-tr-de').value) + ' queda en ' + dinero(quedaria) + '.');
+    if (dobleConteo) partes.push('Hoy ya hay un gasto por ese mismo monto en esa cuenta: si es lo mismo, no lo registres dos veces.');
+    aviso.hidden = !partes.length;
+    aviso.textContent = partes.join(' ');
+  };
+  ['f-tr-monto','f-tr-de','f-tr-fecha'].forEach(id => {
+    $(id).addEventListener('input', repasar); $(id).addEventListener('change', repasar);
+  });
+}
+
+// ── Ajustar una cuenta al saldo real ───────────────────────────
+// Elita: "creo que había más dinero del que en realidad hay". Se captura el saldo que se ve
+// en el banco y la app calcula la diferencia; se guarda el DELTA, no el saldo, para que el
+// saldo siga siendo derivado. El motivo es obligatorio: un ajuste sin explicación es un
+// descuadre escondido.
+function dialogoAjuste() {
+  if (!operaDinero()) { avisar('Los ajustes los hacen Gaby y Marcela'); return; }
+  // Cuántos ajustes había al abrir: si al guardar hay más, alguien ajustó esa cuenta
+  // mientras tanto y el delta calculado aquí ya sobra — dos correcciones de lo mismo
+  // dejarían la cuenta al doble.
+  const ajustesAlAbrir = new Map();
+  // Un ajuste se calcula contra TODOS los libros: si se hace con los cobros cargados pero
+  // los gastos no, la diferencia sale mal y queda guardada para siempre (hallazgo de Codex).
+  if (!(estado.cargado.cobros && estado.cargado.gastos && estado.cargado.movsCuenta && estado.cargado.cuentas)) {
+    avisar('Todavía se están cargando los movimientos; intenta en un momento'); return;
+  }
+  const cuentas = cuentasVivas();
+  if (!cuentas.length) { avisar('No hay cuentas'); return; }
+  const opId = nuevaOp();
+  abrirDialogo('Ajustar el saldo de una cuenta', `
+    <p class="nota" style="margin-bottom:10px">Cuando lo que dice la app no empata con lo que
+      de verdad hay en la cuenta. No se borra nada: se registra la diferencia con su motivo,
+      para que después se pueda ver qué pasó.</p>
+    <div class="campo"><label for="f-aj-cuenta">¿cuál cuenta?</label>
+      <select id="f-aj-cuenta">${cuentas.map(c => `<option value="${esc(c.id)}">${esc(c.nombre)}</option>`).join('')}</select></div>
+    <p class="nota" id="f-aj-actual" style="margin:-8px 0 12px"></p>
+    ${campoNum('f-aj-real','¿cuánto hay de verdad?','min="0"')}
+    <p class="nota" id="f-aj-dif" style="margin:-8px 0 12px"></p>
+    <div class="campo"><label for="f-aj-motivo">¿por qué no cuadraba?</label>
+      <input type="text" id="f-aj-motivo" maxlength="80" placeholder="había dinero de antes de usar la app"></div>
+    <div class="campo"><label for="f-aj-fecha">cuándo</label>
+      <input type="date" id="f-aj-fecha" value="${hoyISO()}"></div>
+    <button class="btn" data-guardar style="width:100%">registrar el ajuste</button>
+  `, async () => {
+    const cuentaId = $('f-aj-cuenta').value;
+    const real = montoEnCentavos($('f-aj-real').value);
+    if (real === null && $('f-aj-real').value.trim() !== '0') { avisar('Escribe cuánto hay de verdad en esa cuenta'); return false; }
+    const realCent = real === null ? 0 : real;
+    const motivo = cortarBytes($('f-aj-motivo').value.trim(), 80);
+    if (!motivo) { avisar('Escribe por qué no cuadraba: es lo que queda registrado'); return false; }
+    const fecha = $('f-aj-fecha').value;
+    if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
+    // Se recalcula AQUÍ, no con lo que se vio al abrir: entre una cosa y otra pudo entrar
+    // un cobro de otra persona.
+    const ajustesAhora = (estado.movsCuenta || []).filter(x => x && x.tipo === 'ajuste'
+      && idDeCuenta({cuentaId: x.cuentaId, cuenta: x.cuenta}) === cuentaId).length;
+    if (ajustesAhora !== (ajustesAlAbrir.get(cuentaId) ?? ajustesAhora)) {
+      avisar('Alguien más acaba de ajustar esa cuenta. Ciérralo y vuelve a abrirlo para ver el saldo bueno');
+      return false;
+    }
+    const actual = saldosPorCuenta(estado).find(c => c.id === cuentaId);
+    const deltaCent = realCent - (actual ? actual.saldo : 0);
+    if (deltaCent === 0) { avisar('Esa cuenta ya cuadra: no hace falta ajustar'); return; }
+    if (Math.abs(deltaCent) >= MONTO_MAX_CENT) { avisar('La diferencia pasa de un millón; revisa el monto'); return false; }
+    try {
+      const r = await escribirIdempotente(doc(db, RAIZ + '/movsCuenta', opId), {
+        tipo: 'ajuste', cuentaId, cuenta: nombreDeCuenta(cuentaId),
+        deltaCent, saldoObservadoCent: realCent, motivo, fecha,
+        registradoPor: estado.usuario.uid, opId, creadoEn: serverTimestamp()
+      });
+      avisar(r === 'creado' ? 'Ajustado. La cuenta ya dice ' + dinero(realCent) : 'Ese ajuste ya estaba registrado');
+    } catch (e) { console.error('ajuste', e); avisar(mensajeError(e)); return false; }
+  });
+  const repasar = () => {
+    const id = $('f-aj-cuenta').value;
+    if (!ajustesAlAbrir.has(id)) {
+      ajustesAlAbrir.set(id, (estado.movsCuenta || []).filter(x => x && x.tipo === 'ajuste'
+        && idDeCuenta({cuentaId: x.cuentaId, cuenta: x.cuenta}) === id).length);
+    }
+    const c = saldosPorCuenta(estado).find(x => x.id === id);
+    const actual = c ? c.saldo : 0;
+    $('f-aj-actual').textContent = 'La app dice que hay ' + dinero(actual) + '.';
+    const real = montoEnCentavos($('f-aj-real').value);
+    const txt = $('f-aj-real').value.trim();
+    if (txt === '') { $('f-aj-dif').textContent = ''; return; }
+    const realCent = real === null ? (txt === '0' ? 0 : null) : real;
+    if (realCent === null) { $('f-aj-dif').textContent = 'Ese monto no se entiende.'; return; }
+    const d = realCent - actual;
+    $('f-aj-dif').textContent = d === 0 ? 'Ya cuadra: no hace falta ajustar.'
+      : 'Se va a registrar un ajuste de ' + (d > 0 ? '+' : '−') + dinero(Math.abs(d)) + ', y la cuenta quedará en ' + dinero(realCent) + '.';
+  };
+  $('f-aj-cuenta').addEventListener('change', repasar);
+  $('f-aj-real').addEventListener('input', repasar);
+  repasar();
 }
 
 // ── Alta de pedido ─────────────────────────────────────────────
@@ -2930,7 +3240,8 @@ function abrirNuevoPedido(prefill = {}) {
         }
         const fechaAnt = $('f-anticipo-fecha').value;
         if (!esFechaValida(fechaAnt)) { avisar('La fecha del anticipo no es válida'); return false; }
-        anticipo = {montoCent, cuenta: $('f-anticipo-cuenta').value, fecha: fechaAnt};
+        anticipo = {montoCent, cuentaId: $('f-anticipo-cuenta').value,
+                    cuenta: nombreDeCuenta($('f-anticipo-cuenta').value), fecha: fechaAnt};
       }
     }
     // Todo el DOM se lee AQUÍ, antes de entrar a la transacción, y el id del renglón se
@@ -2981,7 +3292,7 @@ function abrirNuevoPedido(prefill = {}) {
         tx.set(ref, datos);
         if (anticipo) tx.set(refCobro, {
           pedidoId: folio, tipo: 'pago', montoCent: anticipo.montoCent,
-          cuenta: anticipo.cuenta, fecha: anticipo.fecha,
+          cuenta: anticipo.cuenta, cuentaId: anticipo.cuentaId, fecha: anticipo.fecha,
           registradoPor: estado.usuario.uid, opId: opIdAnticipo, creadoEn: serverTimestamp()
         });
       });
@@ -3398,7 +3709,12 @@ async function escribirIdempotente(ref, datos) {
     // un choque de id con datos distintos (un opId repetido por error, un bug). Se comparan
     // solo los campos que identifican la operación, y solo los que datos trae consigo.
     const previo = s.data();
-    const camposClave = ['tipo', 'pedidoId', 'montoCent', 'opId'];
+    // Las claves dependen del tipo: para un traspaso, 'montoCent' igual no basta —hay que
+    // comparar de dónde y a dónde—, y para un ajuste hay que mirar la cuenta y el delta.
+    // Con la lista genérica, un reintento con datos distintos decía "ya estaba" (Codex).
+    const camposClave = datos.tipo === 'traspaso' ? ['tipo','deId','aId','montoCent','fecha','opId']
+      : datos.tipo === 'ajuste' ? ['tipo','cuentaId','deltaCent','fecha','opId']
+      : ['tipo', 'pedidoId', 'montoCent', 'opId'];
     const coincide = camposClave.every(campo => !(campo in datos) || previo[campo] === datos[campo]);
     if (coincide) return 'ya-estaba';
     throw new Error('conflicto-id');
@@ -3448,7 +3764,8 @@ function dialogoCobro(pedidoId) {
     if (!esFechaValida(fecha)) { avisar('La fecha no es válida'); return false; }
     try {
       const r = await escribirIdempotente(doc(db, RAIZ + '/cobros', opId), {
-        pedidoId, tipo: 'pago', montoCent, cuenta: $('f-cuenta').value, fecha,
+        pedidoId, tipo: 'pago', montoCent,
+        cuenta: nombreDeCuenta($('f-cuenta').value), cuentaId: $('f-cuenta').value, fecha,
         registradoPor: estado.usuario.uid, opId, creadoEn: serverTimestamp()
       });
       avisar(r === 'creado' ? 'Pago registrado' : 'Ese pago ya estaba registrado');
@@ -3675,7 +3992,7 @@ function dialogoCorregirPago(cobroId) {
     try {
       const r = await escribirIdempotente(doc(db, RAIZ + '/cobros', revId), {
         pedidoId: c.pedidoId, tipo: 'reversion', refCobroId: c.id,
-        montoCent: c.montoCent, cuenta: c.cuenta || '', fecha: hoyISO(),
+        montoCent: c.montoCent, cuenta: c.cuenta || '', cuentaId: c.cuentaId || idDeCuenta(c), fecha: hoyISO(),
         registradoPor: estado.usuario.uid, opId: revId, creadoEn: serverTimestamp()
       });
       avisar(r === 'creado' ? 'Pago corregido' : 'Ese pago ya estaba corregido');
@@ -3760,7 +4077,8 @@ function dialogoMovimiento(materialId) {
       });
       if (conGasto) tanda.set(refGasto, {
         concepto: 'compra de ' + m.nombre, categoria: 'material',
-        montoCent: costoCent, fecha, materialId, cuenta: $('f-cuentamov').value,
+        montoCent: costoCent, fecha, materialId,
+        cuenta: nombreDeCuenta($('f-cuentamov').value), cuentaId: $('f-cuentamov').value,
         quien: estado.usuario.uid, opId: opId + '-g', idOperacion: opId, creadoEn: serverTimestamp()
       });
       try { await tanda.commit(); }
@@ -3809,7 +4127,7 @@ $('btn-nuevo-gasto').addEventListener('click', () => {
     try {
       const r = await escribirIdempotente(doc(db, RAIZ + '/gastos', opId), {
         concepto, categoria: $('f-categoria').value, montoCent,
-        cuenta: $('f-cuentag').value, fecha,
+        cuenta: nombreDeCuenta($('f-cuentag').value), cuentaId: $('f-cuentag').value, fecha,
         quien: estado.usuario.uid, opId, creadoEn: serverTimestamp()
       });
       avisar(r === 'creado' ? 'Gasto guardado' : 'Ese gasto ya estaba guardado');
@@ -3826,6 +4144,10 @@ function dialogoBorrarGasto(gastoId) {
   if (!g) return;
   if (!esDuena()) { avisar('Solo la dueña puede borrar un gasto'); return; }
   abrirDialogo('Borrar gasto', `
+    <p class="aviso falta" style="margin-bottom:10px">Borrar quiere decir que este gasto
+      <b>nunca debió registrarse</b>: el dinero no salió. Si sí salió y lo que está mal es el
+      monto o la cuenta, no lo borres: registra otro con lo correcto y anótalo. Borrarlo
+      subiría el saldo de la cuenta como si el dinero hubiera regresado.</p>
     <div class="tarjeta" style="box-shadow:none;margin:0 0 12px">
       <div class="reng"><div class="reng-cuerpo"><div class="reng-tit">${esc(g.concepto||'gasto')}</div>
         <div class="reng-meta">${esc(NOMBRE_CATEGORIA[g.categoria] || g.categoria || '')} · ${esc(fechaCorta(g.fecha))} · ${esc(g.cuenta||'')}</div></div>
@@ -3840,7 +4162,7 @@ function dialogoBorrarGasto(gastoId) {
       const tanda = writeBatch(db);
       tanda.set(doc(db, RAIZ + '/gastosBorrados', g.id), {
         gastoId: g.id, concepto: g.concepto || '', categoria: g.categoria || '',
-        montoCent: g.montoCent || 0, cuenta: g.cuenta || '', fecha: g.fecha || '',
+        montoCent: g.montoCent || 0, cuenta: g.cuenta || '', cuentaId: g.cuentaId || idDeCuenta(g), fecha: g.fecha || '',
         borradoPor: estado.usuario.uid, borradoEn: serverTimestamp()
       });
       tanda.delete(doc(db, RAIZ + '/gastos', g.id));
@@ -3888,7 +4210,8 @@ function escuchar() {
   desuscribir = [];
   const cols = [
     ['pedidos','pedidos'], ['cobros','cobros'], ['materiales','materiales'],
-    ['invMovs','invMovs'], ['gastos','gastos'], ['tareas','tareas'], ['miembros','miembros']
+    ['invMovs','invMovs'], ['gastos','gastos'], ['tareas','tareas'], ['miembros','miembros'],
+    ['movsCuenta','movsCuenta']
   ];
   cols.forEach(([campo, ruta]) => {
     const u = onSnapshot(collection(db, RAIZ + '/' + ruta), snap => {
@@ -3901,8 +4224,30 @@ function escuchar() {
   // El catálogo de cuentas de cobro: un solo documento que edita la dueña.
   desuscribir.push(onSnapshot(doc(db, RAIZ + '/config', 'cuentas'), snap => {
     const lista = snap.exists() ? snap.data().lista : null;
+    // Acepta la forma vieja (una lista de nombres) y la nueva ({id, nombre, alias}). A una
+    // cuenta vieja se le inventa un id a partir de su nombre, estable mientras no la
+    // renombren; en cuanto la dueña guarde el catálogo una vez, queda con id de verdad.
+    const usados = new Set();
+    // Al id derivado de un nombre viejo hay que quitarle los símbolos, y ahí "Nu · Gaby" y
+    // "NuGaby" caían en el MISMO id: las dos cuentas se fusionaban en un solo saldo, que es
+    // justo el bug que esta pantalla existe para evitar. Si el derivado ya se usó, se le
+    // agrega un sufijo por posición — estable mientras no se reordene la lista, y en cuanto
+    // la dueña guarde una vez, todas quedan con id propio de verdad.
+    const idViejo = (nombre, i) => {
+      const base = ('c_' + nombre.replace(/[^A-Za-z0-9]/g, '').slice(0, 24)) || 'c_';
+      const id = usados.has(base) ? (base + i).slice(0, 32) : base;
+      usados.add(id);
+      return id;
+    };
     estado.catalogo.cuentas = Array.isArray(lista)
-      ? lista.filter(c => typeof c === 'string' && c.trim()).slice(0, 12) : [];
+      ? lista.map((c, i) => typeof c === 'string' && c.trim()
+            ? {id: idViejo(c.trim(), i), nombre: c.trim(), alias: []}
+          : c && typeof c === 'object' && typeof c.id === 'string' && /^c_[A-Za-z0-9]{1,30}$/.test(c.id)
+            && typeof c.nombre === 'string' && c.nombre.trim() && !usados.has(c.id) && usados.add(c.id)
+            ? {id: c.id, nombre: c.nombre.trim(), archivada: c.archivada === true,
+               alias: Array.isArray(c.alias) ? c.alias.filter(a => typeof a === 'string' && a.trim()).slice(0, 6) : []}
+          : null)
+          .filter(Boolean).slice(0, CUENTAS_MAX) : [];
     estado.cargado.cuentas = true;
     // Sin esto, un pantalla ya pintada con avisos de "cargando cuentas" (C3) se quedaba
     // así hasta el siguiente repintado por otro motivo: nada más avisaba de que YA llegó.
