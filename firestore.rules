@@ -136,14 +136,17 @@ service cloud.firestore {
           && d.totalCent == d.subtotalPiezasCent + d.get('envioCobradoCent', 0);
       }
       // Lo que se le COBRA a la clienta por el envío (no la guía, que es un gasto). Va
-      // dentro del total, así que nunca puede ser mayor, y un pedido que se recoge en
-      // Puebla no cobra envío.
+      // dentro del total, así que nunca puede ser mayor.
+      //
+      // Ya NO se exige que un pedido 'local' lleve envío cero. La primera versión ataba
+      // las dos cosas y el mismo 7-sep se vio que está mal: un pedido de Puebla también
+      // se manda y también se cobra el envío. "Foráneo" solo dice que hay que restar los
+      // días de paquetería a la fecha de entrega; si lleva envío es otra cosa.
       function envioValido(d) {
         return d.get('envioCobradoCent', 0) is int
           && d.get('envioCobradoCent', 0) >= 0
           && d.get('envioCobradoCent', 0) <= d.totalCent
-          && d.get('entrega', 'local') in ['local','foraneo']
-          && (d.get('entrega', 'local') == 'foraneo' || d.get('envioCobradoCent', 0) == 0);
+          && d.get('entrega', 'local') in ['local','foraneo'];
       }
 
       // ── el negocio y sus miembros ─────────────────────────────

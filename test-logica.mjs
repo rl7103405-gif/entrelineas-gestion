@@ -37,7 +37,7 @@ const api = new Function('estado', fuente + `
           textoDelta, textoBalance, gastosParaPastel, rebanadas, arcosDonut,
           movimientosDe, agruparPorDia, limitarPorDias, montoCobro, porCuentaDe,
           // envio cobrado y anticipo en el alta (7-sep-2026)
-          envioDe, piezasDe, anticipoSugerido, ENVIO_SUGERIDO_CENT};
+          envioDe, piezasDe, anticipoSugerido, ENVIO_INICIAL_CENT, envioSugerido};
 `);
 
 // ── utilidades de prueba ───────────────────────────────────────
@@ -527,7 +527,7 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
   chk('el 50% de un total en cero es cero', t.anticipoSugerido(0) === 0);
   chk('el 50% de un total ausente no es NaN', t.anticipoSugerido(undefined) === 0);
   chk('dos mitades nunca cobran de menos que el total', t.anticipoSugerido(75001) * 2 >= 75001);
-  chk('el envio sugerido son los $150 que dijo Beto', t.ENVIO_SUGERIDO_CENT === 15000);
+  chk('el envio inicial son $150, mientras no haya ninguno cobrado', t.ENVIO_INICIAL_CENT === 15000);
 }
 
 // -- el envio entra en lo vendido, la pieza cuenta una vez ------
@@ -543,6 +543,41 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
   chk('lo vendido incluye el envio cobrado', tot.vendido === 90000);
   chk('la pieza sigue contando una sola vez',
       pedidos[0].renglones.reduce((n, r) => n + r.cantidad, 0) === 1);
+}
+
+// -- el envio sugerido sale del ultimo que se cobro (7-sep-2026) --
+// La tarifa cambia con el destino: Beto dijo $150 en la manana y $250 en la tarde. El boton
+// ofrece el ultimo envio real, no un numero escrito a mano en el codigo.
+{
+  const vacio = api({pedidos: [], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  chk('sin pedidos con envio, sugiere el inicial', vacio.envioSugerido() === 15000);
+
+  const t2 = api({pedidos: [
+    {id:'a', totalCent: 90000, envioCobradoCent: 15000, creadoEn: {toDate: () => new Date('2026-09-07T10:00:00')}},
+    {id:'b', totalCent: 100000, envioCobradoCent: 25000, creadoEn: {toDate: () => new Date('2026-09-07T18:00:00')}},
+    {id:'c', totalCent: 75000, envioCobradoCent: 0, creadoEn: {toDate: () => new Date('2026-09-07T19:00:00')}}
+  ], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  chk('sugiere el ultimo envio cobrado, no el mas viejo', t2.envioSugerido() === 25000);
+  chk('un pedido sin envio no borra la sugerencia', t2.envioSugerido() !== 0);
+
+  // creadoEn llega null el instante entre guardar y que el servidor confirme
+  const t3 = api({pedidos: [
+    {id:'a', totalCent: 90000, envioCobradoCent: 15000, creadoEn: {toDate: () => new Date('2026-09-07T10:00:00')}},
+    {id:'b', totalCent: 100000, envioCobradoCent: 25000, creadoEn: null}
+  ], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  chk('un pedido sin fecha confirmada no se cuela como el mas reciente', t3.envioSugerido() === 15000);
+  chk('una fecha corrupta no rompe la sugerencia',
+      api({pedidos: [{id:'x', totalCent: 1, envioCobradoCent: 1, creadoEn: {toDate: () => new Date('nada')}}],
+           cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []}).envioSugerido() === 1);
+}
+
+// -- un pedido local TAMBIEN puede llevar envio (7-sep-2026) ------
+// La primera version ataba envio a "foraneo" y estaba mal: se manda dentro de Puebla.
+{
+  const local = {id:'p', totalCent: 100000, envioCobradoCent: 25000, entrega:'local'};
+  const t4 = api({pedidos: [local], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
+  chk('un pedido local con envio lo reporta igual', t4.envioDe(local) === 25000);
+  chk('y sus piezas son el total menos ese envio', t4.piezasDe(local) === 75000);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total

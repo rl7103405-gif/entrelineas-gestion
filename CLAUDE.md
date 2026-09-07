@@ -203,12 +203,19 @@ EDITAR"*. Lo que quedó, para no re-discutirlo:
   dos cifras distintas: la guía sigue siendo un gasto de categoría `envio`. Va dentro de
   `totalCent` (es lo que ella debe) pero guardado aparte, para poder decir después cuánto
   fue trabajo y cuánto paquetería trasladada.
-- **Los $150 NO se prellenan.** Es lo que Beto dijo que se cobra, no una tarifa confirmada
-  con la clienta, y un total mal capturado antes obligaba a cancelar y recapturar. Se
-  ofrece con un botón *usar $150.00* y quien captura decide. Ganó Codex el argumento.
-- **El campo de envío solo existe si la entrega es foránea**, y al cambiar a "recoge en
-  Puebla" se limpia: si no, un importe escrito antes se cobraba de más sin que nadie lo
-  viera. Las reglas también lo exigen (`envioValido()`).
+- **La tarifa no se prellena y NO está escrita en el código.** Ganó Codex el argumento de
+  no prellenarla; el mismo día se vio por qué: Beto dijo $150 por la mañana y $250 por la
+  tarde, porque cambia con el destino. `envioSugerido()` ofrece **el último envío que de
+  verdad cobraron** (el pedido con envío más reciente por `creadoEn`) y solo cae a
+  `ENVIO_INICIAL_CENT` ($150) mientras no exista ninguno. Así la sugerencia se ajusta sola
+  cuando suba la paquetería y nadie tiene que venir a tocar el código.
+- **El envío NO depende del tipo de entrega** *(corregido la misma tarde)*. La primera
+  versión solo mostraba el campo en pedidos foráneos y las reglas exigían que un pedido
+  `local` llevara envío cero. Beto lo cazó al capturar un pedido de Puebla que sí llevaba
+  envío: **también mandan dentro de la ciudad**. "Foráneo" solo significa que hay que
+  restar los días de paquetería a la fecha de entrega (`fechaOperativa()`); llevar envío es
+  otra cosa. Hoy el campo está siempre visible y vacío, y al elegir "foráneo" se rellena
+  solo si está vacío, porque ahí seguro se cobra.
 - **El anticipo se captura en el alta**, con su cuenta y su fecha (editable: si el depósito
   llegó ayer, forzarlo a hoy falsea el cierre de la semana). Se guarda como un pago normal
   en `cobros`, así que se corrige con la reversión de siempre. **Va en la MISMA
@@ -243,6 +250,14 @@ EDITAR"*. Lo que quedó, para no re-discutirlo:
 - **"Vendiste" incluye el envío** —es lo que la clienta debe— pero la tarjeta lo dice y
   muestra aparte cuánto fue de piezas. Un mes con muchos foráneos inflaba la cifra sin que
   se notara.
+
+**El envío cobrado es el PRECIO, no la ganancia** *(duda de Elita, 7-sep)*. Preguntó si
+en ese campo va lo que le cobran a la clienta o los $250 menos lo que cuesta la guía. Va el
+precio completo: los $250. Las guías las compran **por paquete** (en el cuaderno de Marcela
+aparece "guías 1,940"), así que ese desembolso se registra una vez como gasto el día que
+compran el paquete, no partido pedido por pedido. La ganancia del envío sale sola de restar
+las dos cosas en el resumen; si se capturara la ganancia en vez del precio, el total del
+pedido dejaría de ser lo que la clienta debe y el saldo saldría mal.
 
 **Riesgo aceptado:** no se exige `creadoEn == request.time` en la auditoría. Amarrarlo
 evitaría fechar el rastro en otro día, pero si `serverTimestamp()` no resolviera exactamente
