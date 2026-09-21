@@ -40,7 +40,7 @@ const api = new Function('estado', fuente + `
           envioDe, piezasDe, anticipoSugerido, ENVIO_INICIAL_CENT, envioSugerido,
           // etapas por pedido y filtros (7-sep-2026, noche)
           ETAPAS_DEFAULT, ETAPAS_MAX, FILTROS_PEDIDOS_DEFAULT, catalogoEtapas, plantillaEtapas,
-          etapasDe, progresoEtapas, filtrarPedidos, hayFiltrosActivos,
+          etapasDe, progresoEtapas, filtrarPedidos, hayFiltrosActivos, pedidosDelPeriodo,
           // saldo por cuenta, traspasos y ajustes (7-sep-2026, noche)
           CUENTAS_DEFAULT, idDeCuenta, nombreDeCuenta, cuentasDeCobro, cuentasVivas,
           saldosPorCuenta, saldoTotal};
@@ -631,6 +631,17 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
 
 // -- filtros de la lista de pedidos (7-sep-2026) --------------------
 {
+  // El reloj se FIJA al lunes 7-sep para todo este bloque. filtrarPedidos() recibe `hoy`,
+  // pero urgencia() usa la fecha real, y el 21-sep estas pruebas empezaron a fallar solas:
+  // los pedidos "de la semana" ya eran de hace dos semanas. Una prueba no puede vencerse.
+  const RealDate = Date, FIJO = new RealDate('2026-09-07T12:00:00').getTime();
+  globalThis.Date = class extends RealDate {
+    constructor(...a) { super(...(a.length ? a : [FIJO])); }
+    static now() { return FIJO; }
+  };
+  // try/finally: si algo truena aquí dentro, el reloj falso no puede quedarse pegado y
+  // envenenar en silencio las pruebas que corren después (code-reviewer, 21-sep).
+  try {
   const hoy = new Date('2026-09-07T12:00:00');   // lunes
   const mk = (id, extra) => ({id, folio: id, estado: 'nuevo', entrega: 'local', totalCent: 1, renglones: [], ...extra});
   const pedidos = [
@@ -681,6 +692,7 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
   // un foraneo para dentro de 3 dias cae en 'hoy o manana' por los dias de paqueteria
   const t3 = api({pedidos: [mk('f3', {fechaComprometida: '2026-09-10', entrega: 'foraneo'})], cobros: [], invMovs: [], materiales: [], gastos: [], tareas: []});
   chk('un foraneo a 3 dias es urgente, no proximo', t3.filtrarPedidos(t3.pedidosOrdenados(), {...D, urgencia:'urgente'}, hoy).length === 1);
+  } finally { globalThis.Date = RealDate; }
 }
 
 // -- un pedido LISTO dice que ya esta hecho (7-sep-2026, de Elita) ----
@@ -792,6 +804,46 @@ console.log('\n19. fechaValida() de las reglas coincide con esFechaValida(), sal
                                 {fecha:'2026-09-07', grupo:'cuenta', monto: 5000},
                                 {fecha:'2026-09-07', grupo:'salio', monto: 30}])[0];
   chk('un traspaso no suma al subtotal del dia', dia.entro === 100 && dia.salio === 30 && dia.movs.length === 3);
+}
+
+// -- todos los pedidos del mes, pagados o no (21-sep-2026, de Elita) ----
+// "Quiero ver todo lo de septiembre": la lista de cobro solo ensena a quien debe.
+{
+  const ts = d => ({toDate: () => new Date(d + 'T12:00:00')});
+  const pedidos = [
+    {id:'a', folio:'a', estado:'entregado', totalCent: 75000, creadoEn: ts('2026-09-03')},   // pagado completo
+    {id:'b', folio:'b', estado:'nuevo',     totalCent: 100000, creadoEn: ts('2026-09-10')},  // debe la mitad
+    {id:'c', folio:'c', estado:'cancelado', totalCent: 50000, creadoEn: ts('2026-09-12')},   // cancelado con anticipo
+    {id:'d', folio:'d', estado:'nuevo',     totalCent: 40000, creadoEn: ts('2026-08-30')},   // de agosto: fuera
+    {id:'e', folio:'e', estado:'listo',     totalCent: 30000, creadoEn: ts('2026-09-15')},   // sobrepagado
+    {id:'f', folio:'f', estado:'nuevo',     totalCent: 20000, creadoEn: null, fechaSolicitada: '2026-09-20'} // sin creadoEn aun
+  ];
+  const cobros = [
+    {pedidoId:'a', tipo:'pago', montoCent: 75000},
+    {pedidoId:'b', tipo:'pago', montoCent: 50000},
+    {pedidoId:'c', tipo:'pago', montoCent: 25000},
+    {pedidoId:'e', tipo:'pago', montoCent: 35000},
+    {pedidoId:'b', tipo:'pago', montoCent: 10000}, {pedidoId:'b', tipo:'reversion', montoCent: 10000}
+  ];
+  const t = api({pedidos, cobros, invMovs: [], materiales: [], gastos: [], tareas: []});
+  const m = t.pedidosDelPeriodo({pedidos, cobros}, new Date('2026-09-01T00:00:00'), new Date('2026-10-01T00:00:00'));
+  const ids = m.lista.map(x => x.p.id).sort().join(',');
+  chk('salen TODOS los del mes, pagados incluidos', ids === 'a,b,c,e,f');
+  chk('un pedido de agosto no se cuela en septiembre', !ids.includes('d'));
+  chk('sin creadoEn cae a la fecha que pidio la clienta', m.lista.some(x => x.p.id === 'f'));
+  chk('vendido no suma el cancelado', m.vendido === 75000 + 100000 + 30000 + 20000);
+  chk('pagado no suma lo del cancelado y resta reversiones', m.pagado === 75000 + 50000 + 35000);
+  chk('falta cobrar solo cuenta saldos positivos', m.falta === 50000 + 20000);
+  chk('cuenta pagados y deudores', m.pagados === 1 && m.deben === 2 && m.cancelados === 1);
+  chk('un cancelado no debe nada', m.lista.find(x => x.p.id === 'c').saldo === 0);
+  chk('el mas reciente va primero', m.lista[0].p.id === 'f');
+  // El total del mes en "cuentas" y el "vendiste" del resumen TIENEN que ser el mismo
+  // número: si se separan, Elita cuadra el mes y no le sale, que es lo que esto arregla.
+  const d0 = new Date('2026-09-01T00:00:00'), d1 = new Date('2026-10-01T00:00:00');
+  chk('vendido del mes cuadra con el resumen',
+      m.vendido === t.totalesEn({pedidos, cobros, gastos: []}, d0, d1).vendido);
+  chk('un pedido corrupto no truena', t.pedidosDelPeriodo({pedidos: [null, ...pedidos], cobros},
+      new Date('2026-09-01T00:00:00'), new Date('2026-10-01T00:00:00')).lista.length === 5);
 }
 
 console.log('\n' + (fallos === 0 ? 'TODO PASA — ' + total + '/' + total

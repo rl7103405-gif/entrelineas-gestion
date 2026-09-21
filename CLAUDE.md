@@ -392,6 +392,24 @@ pedidos. **Decisión de negocio pendiente:** Elita mencionó BBVA y el catálogo
 (Gaby dijo el 2-sep que con esa paga impuestos y no recibe ventas). Si la usan, la dueña la
 agrega desde el editor; no se agregó por adivinar.
 
+## Cuentas: todos los pedidos del mes (21-sep-2026)
+
+Elita, con video: *"cada vez que nos metemos a hacer cuentas llega un punto que se me borra,
+ya no me sale más; quiero ver todo lo de septiembre"*. **No era un bug de pantalla:** la
+lista de cobro enseña solo a quien debe (16 de 36), y los 19 pedidos ya pagados de
+septiembre no aparecían en ningún lado cuando querían cuadrar el mes.
+
+- Dos vistas en la pestaña: **los que deben** (la de siempre, para cobrar) y **todos los
+  del mes** (para cuadrar), con navegación por mes. `pedidosDelPeriodo()` es pura y está
+  probada.
+- **El pedido pertenece al mes en que se capturó** (`fechaAltaDe`), igual que "vendiste" en
+  el resumen. Hay una prueba que ata los dos números: si se separan, el mes no cuadra.
+- Un cancelado se ve pero no suma a lo vendido ni a lo que falta. Un sobrepagado no cuenta
+  ni como pagado ni como deudor: se ve con su pastilla.
+- De paso: las pruebas de filtros del 7-sep fijaban "hoy" pero `urgencia()` usa la fecha
+  real, y el 21-sep **se vencieron solas**. Ahora ese bloque fija el reloj con
+  `globalThis.Date` dentro de un `try/finally`.
+
 **Riesgos aceptados a conciencia:** el reintento tras recargar la página no es idempotente
 (el `opId` se pierde con la recarga); `fechaValida` de las reglas deja pasar el 31 de febrero
 (la app lo frena); las credenciales de `verificar-reglas.mjs` viven en claro en el disco de

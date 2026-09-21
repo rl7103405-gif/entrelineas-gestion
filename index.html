@@ -300,8 +300,20 @@ dialog::backdrop{background:rgba(61,43,39,.35)}
     <section class="pagina" id="pg-cobros">
       <div class="titulo">
         <div><h2>Cuentas por cobrar</h2>
-          <p class="sub">lo que falta que te paguen, de lo más viejo a lo más nuevo</p></div>
+          <p class="sub" id="cob-sub">lo que falta que te paguen, de lo más viejo a lo más nuevo</p></div>
         <button class="btn linea chico" id="btn-cuentas" hidden>cuentas de cobro</button>
+      </div>
+      <!-- Dos preguntas distintas: "¿quién me debe?" (para cobrar) y "¿cómo quedó el
+           mes?" (para cuadrar). La segunda incluye los pedidos ya pagados. -->
+      <div class="chips" style="margin-bottom:12px">
+        <button class="chip" id="cob-deben" aria-pressed="true">los que deben</button>
+        <button class="chip" id="cob-mes" aria-pressed="false">todos los del mes</button>
+        <span style="flex:1"></span>
+        <span id="cob-nav" hidden style="display:inline-flex;gap:6px;align-items:center">
+          <button class="nav-periodo" id="cob-atras" aria-label="mes anterior">‹</button>
+          <b id="cob-titulo" style="min-width:130px;text-align:center;font-size:14px">—</b>
+          <button class="nav-periodo" id="cob-adelante" aria-label="mes siguiente">›</button>
+        </span>
       </div>
       <div class="rejilla tres" id="resumen-cobros" style="margin-bottom:16px"></div>
       <div id="lista-cobros"></div>
@@ -989,6 +1001,39 @@ function fechaCivilDe(v) {
 const fechaAltaDe = p => fechaCivilDe(p.creadoEn)
   || (esFechaValida(p.fechaSolicitada) ? p.fechaSolicitada : null);
 
+// ── Todos los pedidos de un periodo, pagados o no (21-sep-2026) ─
+// Elita: "cada vez que nos metemos a hacer cuentas llega un punto que se me borra, ya no me
+// sale más; quiero ver todo lo de septiembre". La lista de cobro enseña SOLO a quien debe,
+// así que al cuadrar el mes los 19 pedidos ya pagados de septiembre no aparecían en ningún
+// lado. Aquí salen todos, con cuánto pagaron y cuánto falta.
+// El pedido pertenece al mes en que se CAPTURÓ (fechaAltaDe), igual que "vendiste" en el
+// resumen: si no, este total y el del resumen no cuadrarían entre sí.
+function pedidosDelPeriodo(estado, desde, hasta) {
+  const en = f => esFechaValida(f) && fechaLocal(f) >= desde && fechaLocal(f) < hasta;
+  const lista = estado.pedidos
+    .filter(p => p && en(fechaAltaDe(p)))
+    .map(p => {
+      const cancelado = p.estado === 'cancelado';
+      const pagado = pagadoDe(p.id);
+      // Un cancelado no le debe nada al negocio: lo que tenga pagado se ve, pero su total
+      // no se suma a lo vendido ni su saldo a lo que falta cobrar.
+      const saldo = cancelado ? 0 : (p.totalCent || 0) - pagado;
+      return {p, pagado, saldo, cancelado, fecha: fechaAltaDe(p)};
+    })
+    .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha))
+                    || String(b.p.folio || '').localeCompare(String(a.p.folio || '')));
+  const vivos = lista.filter(x => !x.cancelado);
+  return {
+    lista,
+    vendido: vivos.reduce((t, x) => t + (x.p.totalCent || 0), 0),
+    pagado: vivos.reduce((t, x) => t + x.pagado, 0),
+    falta: vivos.reduce((t, x) => t + Math.max(0, x.saldo), 0),
+    pagados: vivos.filter(x => Math.abs(x.saldo) < 1).length,
+    deben: vivos.filter(x => x.saldo >= 1).length,
+    cancelados: lista.length - vivos.length
+  };
+}
+
 // Solo para el centro del donut, donde no cabe el monto completo. Las tarjetas siguen con
 // el peso exacto: a Gaby le importa el centavo, no la tendencia.
 function fmtCorto(c) {
@@ -1045,7 +1090,7 @@ function compararPeriodos(tipo, offset, hoy = new Date()) {
 // de cero: un pago y su reversión suman cero y aun así hubo actividad que comparar.
 function totalesEn(estado, desde, hasta) {
   const en = f => esFechaValida(f) && fechaLocal(f) >= desde && fechaLocal(f) < hasta;
-  const vendidos = estado.pedidos.filter(p => p.estado !== 'cancelado' && en(fechaAltaDe(p)));
+  const vendidos = estado.pedidos.filter(p => p && p.estado !== 'cancelado' && en(fechaAltaDe(p)));
   const cobros = estado.cobros.filter(c => en(c.fecha));
   const gastos = estado.gastos.filter(g => en(g.fecha));
   const cobrado = cobros.reduce((a,c) => a + montoCobro(c), 0);
@@ -1321,13 +1366,19 @@ function pintarPedidos() {
 }
 
 // ── Cuentas por cobrar ─────────────────────────────────────────
+let cobVista = 'deben', cobOffset = 0;
 function pintarCobros() {
   $('btn-cuentas').hidden = !esDuena();
+  $('cob-deben').setAttribute('aria-pressed', cobVista === 'deben');
+  $('cob-mes').setAttribute('aria-pressed', cobVista === 'mes');
+  $('cob-nav').hidden = cobVista !== 'mes';
   if (!estado.cargado.pedidos || !estado.cargado.cobros) {
     $('resumen-cobros').innerHTML = '';
     $('lista-cobros').innerHTML = `<div class="tarjeta"><p class="vacio">Cargando tus cuentas…</p></div>`;
     return;
   }
+  if (cobVista === 'mes') { pintarCobrosDelMes(); return; }
+  $('cob-sub').textContent = 'lo que falta que te paguen, de lo más viejo a lo más nuevo';
   const conSaldo = estado.pedidos
     .filter(p => p.estado !== 'cancelado')
     .map(p => ({p, saldo: saldoDe(p)}))
@@ -1365,6 +1416,47 @@ function pintarCobros() {
         </li>`).join('') + `</ul></div>`;
   $('lista-cobros').querySelectorAll('[data-cobrar]').forEach(b =>
     b.addEventListener('click', () => dialogoCobro(b.dataset.cobrar)));
+}
+
+function pintarCobrosDelMes() {
+  const r = rangoPeriodo('mes', cobOffset);
+  $('cob-titulo').textContent = r.titulo;
+  $('cob-adelante').disabled = cobOffset >= 0;
+  $('cob-sub').textContent = 'todo lo que se pidió en el mes, pagado o no';
+  const m = pedidosDelPeriodo(estado, r.desde, r.hasta);
+  $('resumen-cobros').innerHTML = `
+    <div class="tarjeta"><div class="sub">vendido en ${esc(r.titulo)}</div>
+      <div class="monto" style="font-size:26px">${dinero(m.vendido)}</div>
+      <div class="nota">${m.lista.length - m.cancelados} pedido${m.lista.length - m.cancelados === 1 ? '' : 's'}</div></div>
+    <div class="tarjeta"><div class="sub">ya pagaron</div>
+      <div class="monto pos" style="font-size:26px">${dinero(m.pagado)}</div>
+      <div class="nota">${m.pagados} pagado${m.pagados === 1 ? '' : 's'} completo${m.pagados === 1 ? '' : 's'}</div></div>
+    <div class="tarjeta"><div class="sub">falta cobrar</div>
+      <div class="monto ${m.falta > 0 ? 'neg' : ''}" style="font-size:26px">${dinero(m.falta)}</div>
+      <div class="nota">${m.deben} todavía debe${m.deben === 1 ? '' : 'n'}</div></div>`;
+  $('lista-cobros').innerHTML = !m.lista.length
+    ? `<div class="tarjeta"><p class="vacio">No hay pedidos capturados en ${esc(r.titulo)}.</p></div>`
+    : `<div class="tarjeta"><ul class="lista">` + m.lista.map(({p, pagado, saldo, cancelado, fecha}) => `
+        <li class="reng">
+          <div class="reng-cuerpo">
+            <div class="reng-tit">${esc(p.cliente?.nombre || 'sin nombre')}</div>
+            <div class="reng-meta">${esc(p.folio || '')} · pedido el ${fechaCorta(fecha)}
+              · de ${dinero(p.totalCent)} lleva pagado ${dinero(pagado)}</div>
+          </div>
+          <div class="reng-lado">
+            ${cancelado ? `<span class="pastilla p-gris">cancelado</span>`
+              : Math.abs(saldo) < 1 ? `<span class="pastilla p-verde">pagado</span>`
+              : saldo < 0 ? `<div class="monto pos">${dinero(saldo)}</div>
+                  <span class="pastilla p-ambar" style="margin-top:6px;display:inline-block">sobrepagado</span>`
+              : `<div class="monto neg">${dinero(saldo)}</div>
+                 ${operaDinero() ? `<button class="btn suave chico" style="margin-top:6px" data-cobrar="${esc(p.id)}">registrar pago</button>` : ''}`}
+            <button class="btn linea chico" style="margin-top:6px" data-ver="${esc(p.id)}">ver</button>
+          </div>
+        </li>`).join('') + `</ul></div>`;
+  $('lista-cobros').querySelectorAll('[data-cobrar]').forEach(b =>
+    b.addEventListener('click', () => dialogoCobro(b.dataset.cobrar)));
+  $('lista-cobros').querySelectorAll('[data-ver]').forEach(b =>
+    b.addEventListener('click', () => abrirPedido(b.dataset.ver)));
 }
 
 // ── Inventario ─────────────────────────────────────────────────
@@ -3419,6 +3511,10 @@ $('res-adelante').addEventListener('click', () => { if (resOffset < 0) { resOffs
 $('mov-semana').addEventListener('click', () => { movTipo = 'semana'; movOffset = 0; pintarDinero(); });
 $('mov-mes').addEventListener('click', () => { movTipo = 'mes'; movOffset = 0; pintarDinero(); });
 $('mov-atras').addEventListener('click', () => { movOffset--; pintarDinero(); });
+$('cob-deben').addEventListener('click', () => { cobVista = 'deben'; pintarCobros(); });
+$('cob-mes').addEventListener('click', () => { cobVista = 'mes'; cobOffset = 0; pintarCobros(); });
+$('cob-atras').addEventListener('click', () => { cobOffset--; pintarCobros(); });
+$('cob-adelante').addEventListener('click', () => { if (cobOffset < 0) { cobOffset++; pintarCobros(); } });
 $('mov-adelante').addEventListener('click', () => { if (movOffset < 0) { movOffset++; pintarDinero(); } });
 ['todos','entro','salio'].forEach(f =>
   $('mov-f-' + f).addEventListener('click', () => { movFiltro = f; pintarDinero(); }));
